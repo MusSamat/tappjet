@@ -1,0 +1,470 @@
+// Popytchik.kg data model — matches TZ §5 (v2.0)
+// Principles:
+//   • UUID v4 PKs (gen_random_uuid())
+//   • TIMESTAMPTZ everywhere (UTC)
+//   • Soft delete via deleted_at (NULL = active)
+//   • Indexes on FKs + hot filter fields
+//   • Enums as string + CHECK via @db.VarChar + application-level validation
+//     (Prisma enums would also work, but VARCHAR + CHECK keeps migrations simple
+//      and allows backend to evolve values without `ALTER TYPE`)
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users ────────────────────────────────────────────────────────────
+model User {
+  id               String    @id @default(uuid()) @db.Uuid
+  telegramId       BigInt?   @unique @map("telegram_id")
+  phone            String    @unique @db.VarChar(20)
+  phoneVerifiedAt  DateTime? @map("phone_verified_at") @db.Timestamptz(6)
+  name             String    @db.VarChar(100)
+  avatarUrl        String?   @map("avatar_url") @db.VarChar(500)
+  roles            String[]  @default(["passenger"])
+  rating           Decimal   @default(0.00) @db.Decimal(3, 2)
+  ratingCount      Int       @default(0) @map("rating_count")
+  language         String    @default("ru") @db.VarChar(2)
+  isBlocked        Boolean   @default(false) @map("is_blocked")
+  blockedReason    String?   @map("blocked_reason")
+  passwordHash     String?   @map("password_hash") @db.VarChar(100)
+  lastPasswordChangedAt DateTime? @map("last_password_changed_at") @db.Timestamptz(6)
+  termsAcceptedAt  DateTime? @map("terms_accepted_at") @db.Timestamptz(6)
+  notificationsEnabled Boolean @default(true) @map("notifications_enabled")
+  loyaltyPoints    Int       @default(0) @map("loyalty_points")
+  loyaltyTier      String    @default("novice") @map("loyalty_tier") @db.VarChar(20)
+  lastSeenAt       DateTime? @map("last_seen_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  driverProfile       DriverProfile?
+  tripsAsDriver       Trip[]          @relation("TripDriver")
+  bookings            Booking[]       @relation("BookingPassenger")
+  sentMessages        Message[]       @relation("MessageSender")
+  ratingsGiven        Rating[]        @relation("RatingRater")
+  ratingsReceived     Rating[]        @relation("RatingRatee")
+  refreshTokens       RefreshToken[]
+  authProviders       AuthProvider[]
+  notifications       Notification[]
+  complaintsReported  Complaint[]          @relation("ComplaintReporter")
+  complaintsTargeting Complaint[]          @relation("ComplaintTargetUser")
+  loyaltyTransactions LoyaltyTransaction[]
+  passengerRequests     PassengerRequest[]
+  requestResponses      PassengerRequestResponse[] @relation("RequestResponseDriver")
+
+  @@index([deletedAt])
+  @@index([language])
+  @@map("users")
+}
+
+// ─── Driver profiles ──────────────────────────────────────────────────
+// verification_status: pending | verified | rejected | suspended | blocked
+model DriverProfile {
+  id                 String    @id @default(uuid()) @db.Uuid
+  userId             String    @unique @map("user_id") @db.Uuid
+  carMake            String    @map("car_make") @db.VarChar(50)
+  carModel           String    @map("car_model") @db.VarChar(50)
+  carYear            Int       @map("car_year") @db.SmallInt
+  carColor           String    @map("car_color") @db.VarChar(30)
+  carPlate           String    @unique @map("car_plate") @db.VarChar(15)
+  seatsCount         Int       @map("seats_count") @db.SmallInt
+  licensePhotoPath   String    @map("license_photo_path") @db.VarChar(500)
+  carPassportPath    String    @map("car_passport_path") @db.VarChar(500)
+  carPhotoPath       String    @map("car_photo_path") @db.VarChar(500)
+  selfiePath         String    @map("selfie_path") @db.VarChar(500)
+  verificationStatus String    @default("pending") @map("verification_status") @db.VarChar(20)
+  rejectionReason    String?   @map("rejection_reason")
+  requestedDocs      String[]  @default([]) @map("requested_docs")
+  submittedAt        DateTime  @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  verifiedAt         DateTime? @map("verified_at") @db.Timestamptz(6)
+  verifiedBy         String?   @map("verified_by") @db.Uuid
+  totalTrips         Int       @default(0) @map("total_trips")
+  cancellations30d   Int       @default(0) @map("cancellations_30d")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // `verifiedBy` references admins.id — but admins live in a separate table
+  // from users, so we skip the FK and keep it a plain UUID. Admin identity for
+  // audit is re-derivable from admin_actions.
+
+  @@index([verificationStatus])
+  @@map("driver_profiles")
+}
+
+// ─── Trips ────────────────────────────────────────────────────────────
+// status: active | completed | cancelled
+model Trip {
+  id                   String    @id @default(uuid()) @db.Uuid
+  driverId             String    @map("driver_id") @db.Uuid
+  originCity           String    @map("origin_city") @db.VarChar(50)
+  destinationCity      String    @map("destination_city") @db.VarChar(50)
+  originAddress        String    @map("origin_address") @db.VarChar(200)
+  originLat            Float?    @map("origin_lat")
+  originLng            Float?    @map("origin_lng")
+  waypoints            Json      @default("[]")
+  departureAt          DateTime  @map("departure_at") @db.Timestamptz(6)
+  departureFlexible    Boolean   @default(false) @map("departure_flexible")
+  estimatedDurationMin Int       @map("estimated_duration_min")
+  seatsTotal           Int       @map("seats_total") @db.SmallInt
+  seatsAvailable       Int       @map("seats_available") @db.SmallInt
+  pricePerSeat         Int       @map("price_per_seat")
+  priceNegotiable      Boolean   @default(false) @map("price_negotiable")
+  luggage              String    @default("no") @db.VarChar(10)
+  preferences          Json      @default("{}")
+  comment              String?   @db.VarChar(300)
+  status               String    @default("active") @db.VarChar(20)
+  cancelledReason      String?   @map("cancelled_reason")
+  idempotencyKey       String?   @unique @map("idempotency_key") @db.VarChar(100)
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  version              Int       @default(1)
+
+  driver   User      @relation("TripDriver", fields: [driverId], references: [id])
+  bookings Booking[]
+  ratings  Rating[]
+
+  @@index([driverId])
+  @@index([status])
+  @@index([departureAt])
+  @@index([originCity, destinationCity, departureAt, status], map: "idx_trips_search")
+  @@map("trips")
+}
+
+// ─── Bookings ─────────────────────────────────────────────────────────
+// status: pending | viewed | accepted | rejected | cancelled_by_passenger | cancelled_by_driver
+//       | cancelled_late | no_show | completed | expired
+// viewed: driver saw the request (§11 booking:viewed event)
+// cancelled_by: driver | passenger
+model Booking {
+  id          String    @id @default(uuid()) @db.Uuid
+  tripId      String    @map("trip_id") @db.Uuid
+  passengerId String    @map("passenger_id") @db.Uuid
+  seatsCount  Int       @map("seats_count") @db.SmallInt
+  comment     String?   @db.VarChar(300)
+  status      String    @default("pending") @db.VarChar(25)
+  cancelledBy      String?   @map("cancelled_by") @db.VarChar(10)
+  cancelledAt      DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  cancelReasons    String[]  @map("cancel_reasons") @default([])
+  expiresAt   DateTime? @map("expires_at") @db.Timestamptz(6)
+  viewedAt    DateTime? @map("viewed_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  trip      Trip      @relation(fields: [tripId], references: [id])
+  passenger User      @relation("BookingPassenger", fields: [passengerId], references: [id])
+  messages  Message[]
+
+  @@index([tripId])
+  @@index([passengerId])
+  @@index([status])
+  @@index([expiresAt])
+  // The partial UNIQUE on (trip_id, passenger_id) WHERE status IN (pending, accepted)
+  // is added via raw SQL in the initial migration (Prisma doesn't support partial
+  // indexes in the schema DSL).
+  @@map("bookings")
+}
+
+// ─── Messages (chat) ──────────────────────────────────────────────────
+// chat_phase: pre_booking (pending booking) | full (accepted+)
+// is_filtered: text contained phone/URL that was scrubbed
+// original_text: preserved for audit only — never exposed to clients
+model Message {
+  id           String    @id @default(uuid()) @db.Uuid
+  bookingId    String    @map("booking_id") @db.Uuid
+  senderId     String    @map("sender_id") @db.Uuid
+  text         String    @db.VarChar(2000)
+  chatPhase    String    @default("full") @map("chat_phase") @db.VarChar(20)
+  isFiltered   Boolean   @default(false) @map("is_filtered")
+  originalText String?   @map("original_text") @db.VarChar(2000)
+  isRead       Boolean   @default(false) @map("is_read")
+  readAt       DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  sender  User    @relation("MessageSender", fields: [senderId], references: [id])
+
+  @@index([bookingId])
+  @@index([createdAt])
+  @@map("messages")
+}
+
+// ─── Ratings ──────────────────────────────────────────────────────────
+model Rating {
+  id        String   @id @default(uuid()) @db.Uuid
+  tripId    String   @map("trip_id") @db.Uuid
+  raterId   String   @map("rater_id") @db.Uuid
+  rateeId   String   @map("ratee_id") @db.Uuid
+  score     Int      @db.SmallInt
+  tags      String[] @default([])
+  comment   String?  @db.VarChar(500)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  trip  Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  rater User @relation("RatingRater", fields: [raterId], references: [id])
+  ratee User @relation("RatingRatee", fields: [rateeId], references: [id])
+
+  @@unique([tripId, raterId, rateeId])
+  @@index([rateeId])
+  @@map("ratings")
+}
+
+// ─── Notifications ────────────────────────────────────────────────────
+// channel: telegram | push | both
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  type      String    @db.VarChar(50)
+  channel   String    @db.VarChar(10)
+  payload   Json
+  delivered Boolean   @default(false)
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([delivered])
+  @@map("notifications")
+}
+
+// ─── Complaints ───────────────────────────────────────────────────────
+// category: safety | fraud | rudeness | no_show | other
+// status: new | in_review | resolved | dismissed
+model Complaint {
+  id             String    @id @default(uuid()) @db.Uuid
+  reporterId     String    @map("reporter_id") @db.Uuid
+  targetUserId   String?   @map("target_user_id") @db.Uuid
+  targetTripId   String?   @map("target_trip_id") @db.Uuid
+  category       String    @db.VarChar(50)
+  description    String
+  attachments    String[]  @default([])
+  status         String    @default("new") @db.VarChar(20)
+  escalatedAt    DateTime? @map("escalated_at") @db.Timestamptz(6)
+  resolution     String?
+  handledBy      String?   @map("handled_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  resolvedAt     DateTime? @map("resolved_at") @db.Timestamptz(6)
+
+  reporter   User  @relation("ComplaintReporter", fields: [reporterId], references: [id])
+  targetUser User? @relation("ComplaintTargetUser", fields: [targetUserId], references: [id], onDelete: SetNull)
+  // handledBy is an admin id — admins live in their own table so we skip the FK.
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("complaints")
+}
+
+// ─── OTP codes ────────────────────────────────────────────────────────
+model OtpCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  phone     String    @db.VarChar(20)
+  codeHash  String    @map("code_hash") @db.VarChar(100)
+  attempts  Int       @default(0) @db.SmallInt
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([phone, createdAt])
+  @@index([expiresAt])
+  @@map("otp_codes")
+}
+
+// ─── Refresh tokens ───────────────────────────────────────────────────
+model RefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash") @db.VarChar(100)
+  deviceInfo String?   @map("device_info") @db.VarChar(300)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  // usedAt: flipped on /auth/refresh. Presenting a token with used_at IS NOT
+  // NULL a second time is the Token Reuse Detection trigger (TZ v2.1 §7.5).
+  usedAt     DateTime? @map("used_at") @db.Timestamptz(6)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+// ─── Auth providers (v2.1) ───────────────────────────────────────────
+// One user can link multiple OAuth providers + phone + telegram. Keeping a
+// separate table (vs. column-per-provider) lets us add new providers without
+// schema changes and enforces "one provider-account per one platform account"
+// via the composite UNIQUE below.
+model AuthProvider {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  provider       String   @db.VarChar(20)
+  providerUserId String   @map("provider_user_id") @db.VarChar(200)
+  providerData   Json     @default("{}") @map("provider_data")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+  @@map("auth_providers")
+}
+
+// ─── Cities (KG directory) ────────────────────────────────────────────
+model City {
+  id              Int      @id
+  nameRu          String   @map("name_ru") @db.VarChar(150)
+  nameKg          String   @map("name_ky") @db.VarChar(150)
+  nameEn          String   @map("name_en") @db.VarChar(150)
+  type            String   @db.VarChar(20)
+  regionId        Int      @map("region_id")
+  regionNameRu    String   @map("region_name_ru") @db.VarChar(100)
+  regionNameKg    String   @map("region_name_ky") @db.VarChar(100)
+  districtId      Int?     @map("district_id")
+  districtNameRu  String?  @map("district_name_ru") @db.VarChar(100)
+  districtNameKg  String?  @map("district_name_ky") @db.VarChar(100)
+  lat             Float?
+  lng             Float?
+  prompt          String[]
+  priority        Int      @default(0)
+  isActive        Boolean  @default(true) @map("is_active")
+
+  @@unique([nameRu])
+  @@index([regionId])
+  @@index([isActive])
+  @@map("cities")
+}
+
+// ─── Admins (separate from users) ─────────────────────────────────────
+// role: admin | superadmin
+model Admin {
+  id                String    @id @default(uuid()) @db.Uuid
+  email             String    @unique @db.VarChar(200)
+  passwordHash      String    @map("password_hash") @db.VarChar(100)
+  name              String    @db.VarChar(100)
+  role              String    @default("admin") @db.VarChar(20)
+  totpSecret        String?   @map("totp_secret") @db.VarChar(200)
+  totpEnabled       Boolean   @default(false) @map("totp_enabled")
+  mustChangePassword Boolean  @default(false) @map("must_change_password")
+  lastLoginAt       DateTime? @map("last_login_at") @db.Timestamptz(6)
+  isActive          Boolean   @default(true) @map("is_active")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  actions AdminAction[]
+
+  @@map("admins")
+}
+
+// ─── Admin actions audit log ──────────────────────────────────────────
+model AdminAction {
+  id         String   @id @default(uuid()) @db.Uuid
+  adminId    String   @map("admin_id") @db.Uuid
+  action     String   @db.VarChar(50)
+  targetId   String?  @map("target_id") @db.Uuid
+  targetType String?  @map("target_type") @db.VarChar(30)
+  details    Json?
+  ipAddress  String?  @map("ip_address") @db.Inet
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  admin Admin @relation(fields: [adminId], references: [id])
+
+  @@index([adminId])
+  @@index([createdAt])
+  @@map("admin_actions")
+}
+
+// ─── Loyalty program (§Этап 3) ───────────────────────────────────────
+// Tiers: novice (0-99) | traveler (100-299) | expert (300-599) | elite (600+)
+// source: trip_completed | bonus | manual
+model LoyaltyTransaction {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  points    Int
+  source    String   @db.VarChar(30)
+  tripId    String?  @map("trip_id") @db.Uuid
+  note      String?  @db.VarChar(200)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("loyalty_transactions")
+}
+
+// ─── Analytics snapshot (written by analytics_recalc cron) ───────────
+model AnalyticsSnapshot {
+  key       String   @id @db.VarChar(50)
+  data      Json
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("analytics_snapshots")
+}
+
+// ─── Cron locks (prevents double-run across instances) ───────────────
+model CronLock {
+  jobName     String   @id @map("job_name") @db.VarChar(100)
+  lockedAt    DateTime @map("locked_at") @db.Timestamptz(6)
+  lockedUntil DateTime @map("locked_until") @db.Timestamptz(6)
+  lockedBy    String   @map("locked_by") @db.VarChar(100)
+
+  @@map("cron_locks")
+}
+
+// ─── Passenger requests ───────────────────────────────────────────────
+// Passengers post "I need N seats from A to B on date" — drivers browse.
+// status: open | cancelled | expired
+model PassengerRequest {
+  id              String    @id @default(uuid()) @db.Uuid
+  passengerId     String    @map("passenger_id") @db.Uuid
+  originCity      String    @map("origin_city") @db.VarChar(50)
+  destinationCity String    @map("destination_city") @db.VarChar(50)
+  seatsNeeded     Int       @default(1) @map("seats_needed") @db.SmallInt
+  departureDate   DateTime  @map("departure_date") @db.Timestamptz(6)
+  flexible        Boolean   @default(false)
+  comment         String?   @db.VarChar(500)
+  status          String    @default("open") @db.VarChar(20)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  passenger  User                        @relation(fields: [passengerId], references: [id])
+  responses  PassengerRequestResponse[]
+
+  @@index([status, departureDate])
+  @@index([passengerId])
+  @@index([originCity, destinationCity, status])
+  @@map("passenger_requests")
+}
+
+// ─── Passenger request responses ─────────────────────────────────────
+// Driver responds with a price + departure time offer.
+// status: pending | accepted | declined | expired
+model PassengerRequestResponse {
+  id            String    @id @default(uuid()) @db.Uuid
+  requestId     String    @map("request_id") @db.Uuid
+  driverId      String    @map("driver_id") @db.Uuid
+  price         Int
+  departureTime DateTime  @map("departure_time") @db.Timestamptz(6)
+  message       String?   @db.VarChar(500)
+  status        String    @default("pending") @db.VarChar(20)
+  bookingId     String?   @unique @map("booking_id") @db.Uuid
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(6)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  request PassengerRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  driver  User             @relation("RequestResponseDriver", fields: [driverId], references: [id])
+
+  @@unique([requestId, driverId])
+  @@index([requestId])
+  @@index([driverId])
+  @@index([expiresAt])
+  @@map("passenger_request_responses")
+}

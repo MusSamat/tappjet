@@ -1,0 +1,185 @@
+import type { Server as HttpServer } from 'node:http';
+import { Server as IoServer, type Socket } from 'socket.io';
+import type { PrismaClient } from '@prisma/client';
+import { verifyAccessToken } from '@/lib/jwt.js';
+import { logger } from '@/lib/logger.js';
+import { createChatService } from '@/modules/chat/chat.service.js';
+import type { Notifier } from '@/lib/notifier.js';
+
+/**
+ * Socket.IO server — mounted on the same HTTP server as REST in the MVP
+ * (TZ §2.2: "На MVP оба процесса на одном сервере"). Split into its own
+ * process in Stage 2.
+ *
+ * Protocol (TZ §13.2 + §20):
+ *   Auth:            JWT in handshake.auth.token
+ *   Rooms:           `user:<uuid>` per connection, `chat:<booking_id>` on chat:join
+ *   Client → Server: chat:join, chat:send, chat:read, chat:typing
+ *   Server → Client: chat:joined, chat:message, chat:message_sent, chat:read,
+ *                    chat:typing, chat:error, booking:*, trip:cancelled,
+ *                    notification:new
+ *
+ * Rate limits are enforced in-memory per socket (not cross-process — fine for
+ * MVP since Socket.IO is single-instance per TZ §20.3).
+ */
+
+const CHAT_SEND_LIMIT_PER_MIN = 20;
+
+interface AuthedSocket extends Socket {
+  data: {
+    userId: string;
+    phone: string;
+    roles: string[];
+  };
+}
+
+/**
+ * Step 1 — create the Socket.IO server but don't attach any handlers yet.
+ * Callers need the io reference to build a notifier before step 2.
+ */
+export function createIoServer(httpServer: HttpServer): IoServer {
+  return new IoServer(httpServer, {
+    cors: { origin: true, credentials: true },
+    transports: ['websocket'],
+    pingInterval: 25_000,
+    pingTimeout: 20_000,
+  });
+}
+
+/**
+ * Step 2 — wire handshake auth, chat namespace, and per-socket user rooms.
+ * Call this once the notifier is constructed.
+ */
+export function attachChatNamespace(
+  io: IoServer,
+  prisma: PrismaClient,
+  notifier: Notifier,
+): void {
+  const chat = createChatService(prisma, notifier);
+
+  // ─── Handshake auth ───────────────────────────────────────────────
+  io.use((socket, next) => {
+    try {
+      const token = extractToken(socket);
+      if (!token) return next(new Error('auth_required'));
+      const decoded = verifyAccessToken(token);
+      (socket as AuthedSocket).data = {
+        userId: decoded.sub,
+        phone: decoded.phone,
+        roles: decoded.roles,
+      };
+      next();
+    } catch (err) {
+      logger.debug({ err }, 'socket handshake rejected');
+      next(err instanceof Error ? err : new Error('auth_failed'));
+    }
+  });
+
+  io.on('connection', (rawSocket: Socket) => {
+    const socket = rawSocket as AuthedSocket;
+    const userId = socket.data.userId;
+    socket.join(`user:${userId}`);
+
+    logger.debug({ userId, socketId: socket.id }, 'socket connected');
+
+    // Per-socket sliding-window rate limiter — simple array of timestamps.
+    const sendTimes: number[] = [];
+    const canSend = (): boolean => {
+      const now = Date.now();
+      while (sendTimes.length && now - sendTimes[0]! > 60_000) sendTimes.shift();
+      if (sendTimes.length >= CHAT_SEND_LIMIT_PER_MIN) return false;
+      sendTimes.push(now);
+      return true;
+    };
+
+    // ─── chat:join ───────────────────────────────────────────────────
+    socket.on('chat:join', async ({ booking_id }: { booking_id: string }) => {
+      try {
+        const parts = await chat.participants(booking_id);
+        if (!parts) {
+          socket.emit('chat:error', { code: 'NOT_FOUND' });
+          return;
+        }
+        if (parts.driverId !== userId && parts.passengerId !== userId) {
+          socket.emit('chat:error', { code: 'FORBIDDEN' });
+          return;
+        }
+        if (parts.status === 'rejected') {
+          socket.emit('chat:error', { code: 'CHAT_NOT_AVAILABLE' });
+          return;
+        }
+        await socket.join(`chat:${booking_id}`);
+        const history = await chat.history(booking_id, userId, { limit: 50 });
+        socket.emit('chat:joined', { booking_id, history: history.data });
+      } catch (err) {
+        logger.error({ err, userId }, 'chat:join failed');
+        socket.emit('chat:error', { code: 'INTERNAL_ERROR' });
+      }
+    });
+
+    // ─── chat:send ───────────────────────────────────────────────────
+    socket.on(
+      'chat:send',
+      async (payload: { booking_id: string; text: string; client_msg_id?: string }) => {
+        if (!canSend()) {
+          socket.emit('chat:error', { code: 'RATE_LIMITED' });
+          return;
+        }
+        try {
+          const { message } = await chat.send(
+            payload.booking_id,
+            userId,
+            payload.text,
+            payload.client_msg_id,
+          );
+          // ACK to sender with server id for idempotency matching.
+          socket.emit('chat:message_sent', {
+            client_msg_id: payload.client_msg_id,
+            server_id: message.id,
+          });
+          // Fan out to the room. Include client_msg_id so the sender's
+          // onMessage handler can detect this is their own optimistic message
+          // and skip adding a duplicate (race between ACK and broadcast).
+          io.to(`chat:${payload.booking_id}`).emit('chat:message', {
+            message,
+            client_msg_id: payload.client_msg_id ?? null,
+          });
+        } catch (err) {
+          logger.warn({ err, userId }, 'chat:send failed');
+          socket.emit('chat:error', {
+            code: err instanceof Error && 'code' in err ? (err as { code: string }).code : 'SEND_FAILED',
+          });
+        }
+      },
+    );
+
+    socket.on('chat:read', async ({ message_id }: { message_id: string }) => {
+      try {
+        await chat.markRead(message_id, userId);
+      } catch (err) {
+        logger.debug({ err }, 'chat:read ignored');
+      }
+    });
+
+    socket.on('chat:leave', ({ booking_id }: { booking_id: string }) => {
+      void socket.leave(`chat:${booking_id}`);
+    });
+
+    socket.on('chat:typing', ({ booking_id }: { booking_id: string }) => {
+      // Broadcast to the room, except the sender.
+      socket.to(`chat:${booking_id}`).emit('chat:typing', { user_id: userId });
+    });
+
+    socket.on('disconnect', (reason) => {
+      logger.debug({ userId, socketId: socket.id, reason }, 'socket disconnected');
+    });
+  });
+}
+
+function extractToken(socket: Socket): string | null {
+  const authToken = (socket.handshake.auth as { token?: unknown } | undefined)?.token;
+  if (typeof authToken === 'string' && authToken) return authToken;
+  const authHeader = socket.handshake.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) return authHeader.slice(7);
+  return null;
+}

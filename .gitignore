@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
+*.tsbuildinfo
+
+# Local data volumes (Postgres)
+data/
+pgdata/
+
+# User-uploaded files — PII (photos, driver licences, selfies)
+# In production these live on the host volume / object storage, never in git.
+var/
+
+# Local config overrides
+*.local
+claude

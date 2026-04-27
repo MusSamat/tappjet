@@ -1,0 +1,37 @@
+import pino from 'pino';
+import { env, isDev, isTest } from '@/config/env.js';
+
+export const logger = pino({
+  level: isTest ? 'silent' : env.LOG_LEVEL,
+  base: {
+    service: 'tappjet-api',
+    env: env.NODE_ENV,
+  },
+  timestamp: pino.stdTimeFunctions.isoTime,
+  // Pretty output only in local dev — production emits single-line JSON for log
+  // aggregators (TZ §27 "Structured logs · JSON · level, msg, request_id,
+  // user_id, duration").
+  ...(isDev
+    ? {
+        transport: {
+          target: 'pino-pretty',
+          options: { colorize: true, singleLine: false, translateTime: 'HH:MM:ss.l' },
+        },
+      }
+    : {}),
+  redact: {
+    paths: [
+      'req.headers.authorization',
+      'req.headers.cookie',
+      '*.password',
+      '*.passwordHash',
+      '*.tokenHash',
+      '*.codeHash',
+      '*.totpSecret',
+      '*.initData',
+    ],
+    censor: '[REDACTED]',
+  },
+});
+
+export type Logger = typeof logger;

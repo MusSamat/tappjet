@@ -1,0 +1,229 @@
+import bcrypt from 'bcryptjs';
+import type { PrismaClient } from '@prisma/client';
+import { signAccessToken, signAdminAccessToken, signRefreshToken, refreshTtlSeconds } from '@/lib/jwt.js';
+import { generateUuid, sha256Hex } from '@/lib/random.js';
+import { NoopNotifier, type Notifier } from '@/lib/notifier.js';
+
+/**
+ * Lightweight factories for tests — bypass the public auth flow when we just
+ * need a token. Each factory returns everything the caller might want so we
+ * don't need mock-like helpers.
+ */
+
+export async function createUser(
+  prisma: PrismaClient,
+  overrides: Partial<{
+    phone: string;
+    name: string;
+    roles: string[];
+    language: 'ru' | 'kg';
+    phoneVerified: boolean;
+    telegramId: bigint;
+  }> = {},
+): Promise<{ id: string; accessToken: string; refreshToken: string; phone: string }> {
+  const phone = overrides.phone ?? `+996700${Math.floor(Math.random() * 900_000 + 100_000)}`;
+  const user = await prisma.user.create({
+    data: {
+      phone,
+      name: overrides.name ?? 'Test User',
+      language: overrides.language ?? 'ru',
+      roles: overrides.roles ?? ['passenger'],
+      phoneVerifiedAt: overrides.phoneVerified === false ? null : new Date(),
+      telegramId: overrides.telegramId ?? null,
+    },
+  });
+  const accessToken = signAccessToken({
+    sub: user.id,
+    phone: user.phone,
+    roles: user.roles as ('passenger' | 'driver' | 'both' | 'admin' | 'superadmin')[],
+    telegram_id: user.telegramId ? user.telegramId.toString() : null,
+    provider: 'phone',
+  });
+  const ttl = refreshTtlSeconds();
+  const tokenId = generateUuid();
+  const refreshToken = signRefreshToken({ sub: user.id, tokenId }, ttl);
+  await prisma.refreshToken.create({
+    data: {
+      id: tokenId,
+      userId: user.id,
+      tokenHash: sha256Hex(refreshToken),
+      expiresAt: new Date(Date.now() + ttl * 1000),
+    },
+  });
+  return { id: user.id, accessToken, refreshToken, phone };
+}
+
+export async function createAdmin(
+  prisma: PrismaClient,
+  overrides: Partial<{
+    email: string;
+    role: 'admin' | 'superadmin';
+    password: string;
+  }> = {},
+): Promise<{ id: string; accessToken: string; email: string; role: 'admin' | 'superadmin' }> {
+  const email = overrides.email ?? `admin_${Math.floor(Math.random() * 1e6)}@popytchik.kg`;
+  const role = overrides.role ?? 'admin';
+  const password = overrides.password ?? 'TestPass1234!';
+  const admin = await prisma.admin.create({
+    data: {
+      email,
+      name: 'Test Admin',
+      role,
+      isActive: true,
+      passwordHash: await bcrypt.hash(password, 4),
+    },
+  });
+  const accessToken = signAdminAccessToken({
+    sub: admin.id,
+    email: admin.email,
+    role: admin.role as 'admin' | 'superadmin',
+  });
+  return { id: admin.id, accessToken, email, role };
+}
+
+/**
+ * Minimal valid JPEG buffer — carries the magic bytes that pass detection.
+ */
+export function jpegBuffer(): Buffer {
+  return Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200)]);
+}
+
+/**
+ * Create a verified driver — user with driver role + a verified driver_profile.
+ * Skips the multipart upload flow that the real submit goes through.
+ */
+export async function createVerifiedDriver(
+  prisma: PrismaClient,
+  overrides: Partial<{
+    plate: string;
+    seatsCount: number;
+    name: string;
+  }> = {},
+): Promise<{
+  id: string;
+  accessToken: string;
+  refreshToken: string;
+  phone: string;
+  driverProfileId: string;
+}> {
+  const base = await createUser(prisma, {
+    name: overrides.name ?? 'Test Driver',
+    roles: ['passenger', 'driver'],
+  });
+  const dp = await prisma.driverProfile.create({
+    data: {
+      userId: base.id,
+      carMake: 'Toyota',
+      carModel: 'Camry',
+      carYear: 2015,
+      carColor: 'White',
+      carPlate: overrides.plate ?? `D${Math.floor(Math.random() * 900_000 + 100_000)}`,
+      seatsCount: overrides.seatsCount ?? 4,
+      licensePhotoPath: 'seed/license.jpg',
+      carPassportPath: 'seed/passport.jpg',
+      carPhotoPath: 'seed/car.jpg',
+      selfiePath: 'seed/selfie.jpg',
+      verificationStatus: 'verified',
+      verifiedAt: new Date(),
+    },
+  });
+  return { ...base, driverProfileId: dp.id };
+}
+
+/**
+ * Create an active trip owned by the given driver.
+ */
+export async function createTrip(
+  prisma: PrismaClient,
+  driverId: string,
+  overrides: Partial<{
+    seatsTotal: number;
+    seatsAvailable: number;
+    pricePerSeat: number;
+    departureAt: Date;
+    status: string;
+  }> = {},
+): Promise<{ id: string }> {
+  const trip = await prisma.trip.create({
+    data: {
+      driverId,
+      originCity: 'Бишкек',
+      destinationCity: 'Ош',
+      originAddress: 'Бишкек, Западный автовокзал',
+      // Randomise day offset (1–365) to avoid idx_trips_one_active_per_day unique
+      // constraint when a test creates multiple trips for the same driver.
+      departureAt: overrides.departureAt ?? new Date(
+        Date.now() + (1 + Math.floor(Math.random() * 365)) * 24 * 60 * 60_000,
+      ),
+      estimatedDurationMin: 360,
+      pricePerSeat: overrides.pricePerSeat ?? 1000,
+      seatsTotal: overrides.seatsTotal ?? 3,
+      seatsAvailable: overrides.seatsAvailable ?? overrides.seatsTotal ?? 3,
+      status: overrides.status ?? 'active',
+    },
+  });
+  return { id: trip.id };
+}
+
+/**
+ * Create a booking in any status. Defaults to pending.
+ */
+export async function createBooking(
+  prisma: PrismaClient,
+  passengerId: string,
+  tripId: string,
+  overrides: Partial<{
+    seatsCount: number;
+    status: string;
+    viewedAt: Date | null;
+    expiresAt: Date;
+  }> = {},
+): Promise<{ id: string }> {
+  const booking = await prisma.booking.create({
+    data: {
+      passengerId,
+      tripId,
+      seatsCount: overrides.seatsCount ?? 1,
+      status: overrides.status ?? 'pending',
+      viewedAt: overrides.viewedAt ?? null,
+      expiresAt: overrides.expiresAt ?? new Date(Date.now() + 60 * 60_000),
+    },
+  });
+  return { id: booking.id };
+}
+
+/**
+ * Creates a Notifier with all methods noop-ed except those explicitly provided.
+ * Avoids the class-spread pitfall (prototype methods don't copy via {...noop}).
+ */
+export function makeNotifier(overrides: Partial<Notifier> = {}): Notifier {
+  const base = new NoopNotifier();
+  return new Proxy(base, {
+    get(target, prop) {
+      const key = prop as keyof Notifier;
+      if (key in overrides) return overrides[key];
+      const val = target[key];
+      return typeof val === 'function' ? val.bind(target) : val;
+    },
+  }) as unknown as Notifier;
+}
+
+/**
+ * Pre-seed the launch cities so search filters that validate against the
+ * directory don't reject test data.
+ */
+export async function seedLaunchCities(prisma: PrismaClient): Promise<void> {
+  const cities = [
+    { id: 1, nameRu: 'Бишкек', nameKg: 'Бишкек', nameEn: 'Bishkek', type: 'city', regionId: 7, regionNameRu: 'Бишкек', regionNameKg: 'Бишкек', prompt: [] },
+    { id: 4, nameRu: 'Ош', nameKg: 'Ош', nameEn: 'Osh', type: 'city', regionId: 8, regionNameRu: 'Ош', regionNameKg: 'Ош', prompt: [] },
+    { id: 209, nameRu: 'Каракол', nameKg: 'Каракол', nameEn: 'Karakol', type: 'city', regionId: 2, regionNameRu: 'Иссык-Кульская область', regionNameKg: 'Ысык-Көл облусу', prompt: [] },
+    { id: 3, nameRu: 'Нарын', nameKg: 'Нарын', nameEn: 'Naryn', type: 'city', regionId: 3, regionNameRu: 'Нарынская область', regionNameKg: 'Нарын облусу', prompt: [] },
+  ] as const;
+  for (const c of cities) {
+    await prisma.city.upsert({
+      where: { nameRu: c.nameRu },
+      update: {},
+      create: { ...c, isActive: true },
+    });
+  }
+}

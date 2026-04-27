@@ -1,0 +1,30 @@
+import type { PrismaClient } from '@prisma/client';
+import { CronScheduler } from './scheduler.js';
+import { cleanupExpiredOtpJob } from './jobs/cleanupOtp.js';
+import { cleanupExpiredRefreshJob } from './jobs/cleanupRefreshTokens.js';
+import { escalateVerificationsJob } from './jobs/escalateVerifications.js';
+import { autoCompleteTripsJob } from './jobs/autoCompleteTrips.js';
+import { tripReminder2hJob } from './jobs/tripReminder2h.js';
+import { expireBookingsJob } from './jobs/expireBookings.js';
+import { escalateComplaintsJob } from './jobs/escalateComplaints.js';
+import { recalcCancellationsJob } from './jobs/recalcCancellations.js';
+import { hardDeleteUsersJob } from './jobs/hardDeleteUsers.js';
+import { analyticsRecalcJob } from './jobs/analyticsRecalc.js';
+
+export function buildScheduler(prisma: PrismaClient): CronScheduler {
+  const scheduler = new CronScheduler(prisma);
+  scheduler.register(cleanupExpiredOtpJob);
+  scheduler.register(cleanupExpiredRefreshJob);
+  scheduler.register(escalateVerificationsJob);
+  scheduler.register(autoCompleteTripsJob);
+  scheduler.register(tripReminder2hJob);
+  scheduler.register(expireBookingsJob);
+  scheduler.register(escalateComplaintsJob);
+  scheduler.register(recalcCancellationsJob);
+  scheduler.register(hardDeleteUsersJob);
+  scheduler.register(analyticsRecalcJob);
+  return scheduler;
+}
+
+export { CronScheduler } from './scheduler.js';
+export type { Job } from './scheduler.js';

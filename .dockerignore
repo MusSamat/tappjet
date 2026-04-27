@@ -1,0 +1,18 @@
+node_modules
+dist
+coverage
+.git
+.env
+.env.*
+!.env.example
+*.log
+.idea
+.vscode
+tests
+claude
+
+# User uploads are mounted as a host volume in production — never bake into image
+var/
+
+# Dev-only scripts (devToken mints JWTs without OTP — security risk in prod image)
+scripts/devToken.ts
