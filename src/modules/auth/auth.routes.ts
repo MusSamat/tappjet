@@ -185,6 +185,27 @@ export function createAuthRouter(
     }),
   );
 
+  // ─── Telegram registration link (deep-link → bot → OTP) ─────────────
+  router.post(
+    '/telegram/link/init',
+    sendOtpMinuteLimit,
+    sendOtpDailyLimit,
+    validate({ body: SendOtpBody }),
+    asyncHandler(async (req, res) => {
+      const { phone } = req.body as { phone: string };
+      res.status(200).json(await service.initTelegramLink(phone));
+    }),
+  );
+
+  router.get(
+    '/telegram/link/status',
+    validate({ query: z.object({ token: z.string().min(1).max(100) }) }),
+    asyncHandler(async (req, res) => {
+      const { token } = req.query as { token: string };
+      res.status(200).json(await service.getTelegramLinkStatus(token));
+    }),
+  );
+
   // ─── Telegram Bot OTP (login without password / forgot password) ─────
   router.post(
     '/telegram/otp/send',

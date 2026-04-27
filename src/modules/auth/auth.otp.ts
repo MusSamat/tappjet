@@ -1,9 +1,10 @@
 import type { PrismaClient } from '@prisma/client';
-import { Errors } from '@/lib/errors.js';
+import { Errors, AppError } from '@/lib/errors.js';
 import * as password from '@/lib/bcrypt.js';
-import { generateOtp } from '@/lib/random.js';
+import { generateOtp, generateRefreshTokenPlain, generateUuid } from '@/lib/random.js';
 import { getSmsProvider } from '@/lib/sms.js';
 import { logger } from '@/lib/logger.js';
+import { env } from '@/config/env.js';
 import type { Provider } from '@/lib/jwt.js';
 import type { AuthResult } from './auth.types.js';
 import { issueFullAuthForUser } from './auth.helpers.js';
@@ -13,6 +14,7 @@ import {
   OTP_BRUTEFORCE_BLOCK_MIN,
   OTP_DAILY_CAP,
   OTP_MIN_GAP_SEC,
+  TELEGRAM_LINK_TOKEN_TTL_SEC,
 } from './auth.constants.js';
 
 // Minimal Telegram bot interface — grammy Bot satisfies this at runtime.
@@ -20,41 +22,87 @@ export interface TelegramSender {
   api: { sendMessage(chatId: number, text: string): Promise<unknown> };
 }
 
-export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | null = null) {
-  // Shared rate-limit + code generation used by both SMS and Telegram OTP paths.
-  async function createOtpRecord(phone: string): Promise<string> {
-    const lastOtp = await prisma.otpCode.findFirst({
-      where: { phone },
-      orderBy: { createdAt: 'desc' },
-    });
-    const now = Date.now();
-    if (lastOtp && now - lastOtp.createdAt.getTime() < OTP_MIN_GAP_SEC * 1000) {
-      throw Errors.rateLimited({ bucket: 'otp_send_min', reason: 'too_soon' });
-    }
-    const dayAgo = new Date(now - 24 * 60 * 60_000);
-    const dayCount = await prisma.otpCode.count({
-      where: { phone, createdAt: { gte: dayAgo } },
-    });
-    if (dayCount >= OTP_DAILY_CAP) {
-      throw Errors.rateLimited({ bucket: 'otp_send_day', limit: OTP_DAILY_CAP });
-    }
-    const code = generateOtp();
-    const codeHash = await password.hash(code);
-    const expiresAt = new Date(Date.now() + OTP_TTL_SEC * 1000);
-    await prisma.otpCode.create({ data: { phone, codeHash, expiresAt } });
-    return code;
+// Module-level so both createOtpMethods and handleTelegramLinkToken can use it.
+async function createOtpRecord(prisma: PrismaClient, phone: string): Promise<string> {
+  const lastOtp = await prisma.otpCode.findFirst({
+    where: { phone },
+    orderBy: { createdAt: 'desc' },
+  });
+  const now = Date.now();
+  if (lastOtp && now - lastOtp.createdAt.getTime() < OTP_MIN_GAP_SEC * 1000) {
+    throw Errors.rateLimited({ bucket: 'otp_send_min', reason: 'too_soon' });
+  }
+  const dayAgo = new Date(now - 24 * 60 * 60_000);
+  const dayCount = await prisma.otpCode.count({
+    where: { phone, createdAt: { gte: dayAgo } },
+  });
+  if (dayCount >= OTP_DAILY_CAP) {
+    throw Errors.rateLimited({ bucket: 'otp_send_day', limit: OTP_DAILY_CAP });
+  }
+  const code = generateOtp();
+  const codeHash = await password.hash(code);
+  const expiresAt = new Date(Date.now() + OTP_TTL_SEC * 1000);
+  await prisma.otpCode.create({ data: { phone, codeHash, expiresAt } });
+  return code;
+}
+
+// Called by the grammy /start handler when the user opens the deep-link.
+// Validates the token, creates an OTP record, delivers the code via bot,
+// and marks the token as sent — all atomically in a transaction.
+export async function handleTelegramLinkToken(
+  prisma: PrismaClient,
+  bot: TelegramSender,
+  token: string,
+  telegramId: number,
+): Promise<void> {
+  const record = await prisma.telegramLinkToken.findUnique({ where: { token } });
+  if (!record || record.expiresAt.getTime() <= Date.now()) {
+    await bot.api.sendMessage(telegramId, 'Ссылка устарела. Начните регистрацию заново.');
+    return;
+  }
+  if (record.status !== 'waiting') {
+    await bot.api.sendMessage(telegramId, 'Код уже отправлен. Введите его в браузере.');
+    return;
   }
 
-  async function sendOtp(phone: string): Promise<{ expiresInSec: number }> {
-    const code = await createOtpRecord(phone);
-    const text = `Tappjet: \${code} — код подтверждения. Срок действия: 10 минут.`;
+  let code: string;
+  try {
+    code = await createOtpRecord(prisma, record.phone);
+  } catch (err) {
+    const isRateLimit = err instanceof AppError && err.code === 'RATE_LIMITED';
+    const msg = isRateLimit
+      ? 'Слишком много запросов. Подождите минуту и попробуйте снова.'
+      : 'Не удалось создать код. Попробуйте позже.';
+    await bot.api.sendMessage(telegramId, msg);
+    return;
+  }
+
+  await prisma.telegramLinkToken.update({
+    where: { token },
+    data: { telegramId: BigInt(telegramId), status: 'sent' },
+  });
+
+  await bot.api.sendMessage(
+    telegramId,
+    `Tappjet: ${code} — код подтверждения. Срок действия: 10 минут.`,
+  );
+}
+
+export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | null = null) {
+  async function sendOtp(phone: string): Promise<{ expiresInSec: number; debug_code?: string }> {
+    const code = await createOtpRecord(prisma, phone);
+    const text = `Tappjet: ${code} — код подтверждения. Срок действия: 10 минут.`;
     try {
       await getSmsProvider().send(phone, text);
     } catch (err) {
       logger.error({ err, phone }, 'SMS send failed');
       throw Errors.serviceUnavailable('SMS delivery failed');
     }
-    return { expiresInSec: OTP_TTL_SEC };
+    const isDev = process.env.NODE_ENV !== 'production';
+    return {
+      expiresInSec: OTP_TTL_SEC,
+      ...(isDev && { debug_code: code }),
+    };
   }
 
   async function sendTelegramOtp(phone: string): Promise<{ expiresInSec: number }> {
@@ -68,8 +116,8 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     }
     if (!bot) throw Errors.serviceUnavailable('Telegram bot not configured');
 
-    const code = await createOtpRecord(phone);
-    const text = `Tappjet: \${code} — код подтверждения. Срок действия: 10 минут.`;
+    const code = await createOtpRecord(prisma, phone);
+    const text = `Tappjet: ${code} — код подтверждения. Срок действия: 10 минут.`;
     try {
       await bot.api.sendMessage(Number(user.telegramId), text);
     } catch (err) {
@@ -77,6 +125,25 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
       throw Errors.serviceUnavailable('Telegram message delivery failed');
     }
     return { expiresInSec: OTP_TTL_SEC };
+  }
+
+  async function initTelegramLink(
+    phone: string,
+  ): Promise<{ token: string; deepLink: string; expiresInSec: number }> {
+    // UUID = 36 chars → "reg_" + 36 = 40 chars, well under Telegram's 64-char limit.
+    const token = generateUuid();
+    const expiresAt = new Date(Date.now() + TELEGRAM_LINK_TOKEN_TTL_SEC * 1000);
+    await prisma.telegramLinkToken.create({ data: { token, phone, expiresAt } });
+    const deepLink = `https://t.me/${env.TELEGRAM_BOT_USERNAME}?start=reg_${token}`;
+    return { token, deepLink, expiresInSec: TELEGRAM_LINK_TOKEN_TTL_SEC };
+  }
+
+  async function getTelegramLinkStatus(
+    token: string,
+  ): Promise<{ status: 'waiting' | 'sent' | 'expired' }> {
+    const record = await prisma.telegramLinkToken.findUnique({ where: { token } });
+    if (!record || record.expiresAt.getTime() <= Date.now()) return { status: 'expired' };
+    return { status: record.status as 'waiting' | 'sent' | 'expired' };
   }
 
   async function verifyOtp(
@@ -158,5 +225,5 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     return issueFullAuthForUser(prisma, user.id, provider, deviceInfo);
   }
 
-  return { sendOtp, sendTelegramOtp, verifyOtp };
+  return { sendOtp, sendTelegramOtp, initTelegramLink, getTelegramLinkStatus, verifyOtp };
 }

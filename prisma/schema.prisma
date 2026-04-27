@@ -468,3 +468,20 @@ model PassengerRequestResponse {
   @@index([expiresAt])
   @@map("passenger_request_responses")
 }
+
+// ─── Telegram registration link tokens ───────────────────────────────
+// Ties a web registration session to a Telegram chat so OTP can be
+// delivered via bot instead of SMS. TTL = 10 minutes.
+// status: waiting (bot not yet opened) | sent (OTP delivered) | expired
+model TelegramLinkToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  token      String    @unique @db.VarChar(36)
+  phone      String    @db.VarChar(20)
+  telegramId BigInt?   @map("telegram_id")
+  status     String    @default("waiting") @db.VarChar(10)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([expiresAt])
+  @@map("telegram_link_tokens")
+}

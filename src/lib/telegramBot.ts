@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import { Bot, type Context } from 'grammy';
 import { env } from '@/config/env.js';
 import { logger } from '@/lib/logger.js';
+import { handleTelegramLinkToken } from '@/modules/auth/auth.otp.js';
 import type {
   Notifier,
   PublicBooking,
@@ -338,12 +339,23 @@ export async function startTelegramBot(prisma: PrismaClient): Promise<Bot | null
     .catch((err: unknown) => logger.warn({ err }, 'setMyCommands failed'));
 
   bot.command('start', async (ctx: Context) => {
-    await ctx.reply('Добро пожаловать! Открыть приложение:', {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: 'Открыть приложение', web_app: { url: env.BASE_URL } }],
-        ],
-      },
+    const payload = ctx.match as string | undefined;
+    logger.debug({ payload, from: ctx.from?.id }, 'bot /start received');
+    if (payload?.startsWith('reg_') && ctx.from) {
+      await handleTelegramLinkToken(prisma, bot, payload.slice(4), ctx.from.id).catch(
+        (err: unknown) => logger.warn({ err }, 'handleTelegramLinkToken failed'),
+      );
+      return;
+    }
+    const isHttps = env.BASE_URL.startsWith('https://');
+    await ctx.reply('Добро пожаловать в Tappjet!', {
+      ...(isHttps && {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: 'Открыть приложение', web_app: { url: env.BASE_URL } }],
+          ],
+        },
+      }),
     });
   });
 
