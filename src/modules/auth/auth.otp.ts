@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { Errors, AppError } from '@/lib/errors.js';
 import * as password from '@/lib/bcrypt.js';
-import { generateOtp, generateRefreshTokenPlain, generateUuid } from '@/lib/random.js';
+import { generateOtp, generateUuid } from '@/lib/random.js';
 import { getSmsProvider } from '@/lib/sms.js';
 import { logger } from '@/lib/logger.js';
 import { env } from '@/config/env.js';

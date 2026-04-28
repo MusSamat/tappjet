@@ -259,6 +259,9 @@ export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
     async requestResponseDeclined(driverId) {
       await send(driverId, { ru: 'Пассажир отклонил ваше предложение.', kg: 'Жүргүнчү сиздин сунушту четке какты.' }, {});
     },
+    async tripCompletedRate() {
+      // In-app rating prompt only — no Telegram noise.
+    },
   };
 }
 
@@ -315,6 +318,7 @@ export function composeNotifiers(...notifiers: Notifier[]): Notifier {
     requestResponseReceived: call('requestResponseReceived'),
     requestResponseAccepted: call('requestResponseAccepted'),
     requestResponseDeclined: call('requestResponseDeclined'),
+    tripCompletedRate: call('tripCompletedRate'),
   };
 }
 

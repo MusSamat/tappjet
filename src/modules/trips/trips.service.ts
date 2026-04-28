@@ -72,6 +72,7 @@ export interface TripsService {
   getById(id: string): Promise<TripDetail>;
   patch(id: string, driverUserId: string, patch: TripPatchInput): Promise<TripDetail>;
   cancel(id: string, driverUserId: string, reason?: string): Promise<{ status: 'cancelled' }>;
+  complete(id: string, driverUserId: string): Promise<{ status: 'completed' }>;
   myTrips(
     driverUserId: string,
     query: MyTripsInput,
