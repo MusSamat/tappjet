@@ -46,7 +46,7 @@ export function createApp(
   app.use(helmet({ contentSecurityPolicy: isProd ? undefined : false }));
   const allowedOrigins = isProd
     ? (env.ALLOWED_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean)
-    : ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001', 'https://legacy-nurse-black-try.trycloudflare.com'];
+    : ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001', 'https://christopher-catch-surgeon-album.trycloudflare.com'];
 
   // Matches any localhost or 127.0.0.1 origin on any port — covers Flutter web
   // which picks a random port (`flutter run -d chrome`).
