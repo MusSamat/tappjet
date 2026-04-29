@@ -342,6 +342,18 @@ export async function startTelegramBot(prisma: PrismaClient): Promise<Bot | null
     ])
     .catch((err: unknown) => logger.warn({ err }, 'setMyCommands failed'));
 
+  if (env.BASE_URL.startsWith('https://')) {
+    await bot.api
+      .setChatMenuButton({
+        menu_button: {
+          type: 'web_app',
+          text: '🚗 Открыть Tappjet',
+          web_app: { url: env.BASE_URL },
+        },
+      })
+      .catch((err: unknown) => logger.warn({ err }, 'setChatMenuButton failed'));
+  }
+
   bot.command('start', async (ctx: Context) => {
     const payload = ctx.match as string | undefined;
     logger.debug({ payload, from: ctx.from?.id }, 'bot /start received');
