@@ -210,7 +210,7 @@ export function createAuthRouter(
   router.post(
     '/telegram/bot-login/init',
     telegramAuthLimit,
-    asyncHandler(async (req, res) => {
+    asyncHandler(async (_req, res) => {
       res.status(200).json(await service.initBotLogin());
     }),
   );

@@ -89,4 +89,7 @@ export interface AuthService {
   ): Promise<AuthResult>;
   addProvider(userId: string, body: import('./auth.schemas.js').AddProviderInput): Promise<{ provider: Provider }>;
   removeProvider(userId: string, provider: Provider): Promise<void>;
+  initBotLogin(): Promise<{ token: string; deepLink: string; expiresInSec: number }>;
+  getBotLoginStatus(token: string): Promise<{ status: 'waiting' | 'done' | 'expired' | 'not_found' }>;
+  claimBotLogin(token: string, deviceInfo?: string): Promise<AuthResult>;
 }
