@@ -351,16 +351,62 @@ export async function startTelegramBot(prisma: PrismaClient): Promise<Bot | null
       );
       return;
     }
+
+    const firstName = ctx.from?.first_name ?? 'друг';
+    const isReturning = ctx.from
+      ? !!(await prisma.authProvider.findFirst({
+          where: { provider: 'telegram', providerUserId: String(ctx.from.id) },
+        }))
+      : false;
+
+    const greeting = isReturning
+      ? `👋 С возвращением, <b>${firstName}</b>!`
+      : `👋 Привет, <b>${firstName}</b>!`;
+
+    const text =
+      `${greeting}\n\n` +
+      `🚗 <b>Tappjet — поездки по Кыргызстану</b>\n\n` +
+      `Попутчики и такси из Бишкека в Ош, Каракол, Нарын и другие города. Или предложи свою поездку!\n\n` +
+      `✅ Верифицированные водители\n` +
+      `⭐ Рейтинги и отзывы\n` +
+      `💬 Встроенный чат\n` +
+      `📱 Работает прямо в Telegram`;
+
     const isHttps = env.BASE_URL.startsWith('https://');
-    await ctx.reply('Добро пожаловать в Tappjet!', {
-      ...(isHttps && {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: 'Открыть приложение', web_app: { url: env.BASE_URL } }],
+    await ctx.reply(text, {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          ...(isHttps
+            ? [[{ text: '🚗 Открыть Tappjet', web_app: { url: env.BASE_URL } }]]
+            : []),
+          [
+            { text: 'ℹ️ Помощь', callback_data: 'help' },
+            { text: '🔔 Уведомления', callback_data: 'notify' },
           ],
-        },
-      }),
+        ],
+      },
     });
+  });
+
+  bot.callbackQuery('help', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.reply(
+      'Платформа попутчиков. Публикуйте поездки, бронируйте места.\nПоддержка: @tappjet_support',
+    );
+  });
+
+  bot.callbackQuery('notify', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    const user = await prisma.user.findFirst({ where: { telegramId: BigInt(ctx.from.id) } });
+    if (!user) {
+      await ctx.reply('Войдите через приложение, чтобы управлять уведомлениями.');
+      return;
+    }
+    const next = !user.notificationsEnabled;
+    await prisma.user.update({ where: { id: user.id }, data: { notificationsEnabled: next } });
+    await ctx.reply(next ? '🔔 Уведомления включены.' : '🔕 Уведомления отключены.');
   });
 
   bot.command('help', (ctx: Context) =>
