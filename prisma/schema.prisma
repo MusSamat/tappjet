@@ -485,3 +485,20 @@ model TelegramLinkToken {
   @@index([expiresAt])
   @@map("telegram_link_tokens")
 }
+
+
+// ─── Telegram bot login tokens ────────────────────────────────────────
+// Browser clicks "Login with Telegram" → bot receives deep-link →
+// identifies user by telegramId → marks token done → browser polls + claims.
+// status: waiting | done (userId set) | used
+model TelegramBotLoginToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  token     String   @unique @db.VarChar(36)
+  status    String   @default("waiting") @db.VarChar(10)
+  userId    String?  @map("user_id") @db.Uuid
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([expiresAt])
+  @@map("telegram_bot_login_tokens")
+}

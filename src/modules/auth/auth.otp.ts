@@ -88,6 +88,50 @@ export async function handleTelegramLinkToken(
   );
 }
 
+export async function handleBotLoginToken(
+  prisma: PrismaClient,
+  bot: TelegramSender,
+  token: string,
+  telegramId: number,
+): Promise<void> {
+  const record = await prisma.telegramBotLoginToken.findUnique({ where: { token } });
+  if (!record || record.expiresAt.getTime() <= Date.now()) {
+    await bot.api.sendMessage(telegramId, 'Ссылка устарела. Попробуйте снова.');
+    return;
+  }
+  if (record.status !== 'waiting') {
+    await bot.api.sendMessage(telegramId, 'Вход уже выполнен. Вернитесь в приложение.');
+    return;
+  }
+  const user = await prisma.user.findFirst({
+    where: { telegramId: BigInt(telegramId), deletedAt: null },
+  });
+  if (!user) {
+    await prisma.telegramBotLoginToken.update({
+      where: { token },
+      data: { status: 'not_found' },
+    });
+    await bot.api.sendMessage(
+      telegramId,
+      'Аккаунт с этим Telegram не найден.\nЗарегистрируйтесь через приложение или войдите по номеру телефона.',
+    );
+    return;
+  }
+  if (user.isBlocked) {
+    await prisma.telegramBotLoginToken.update({
+      where: { token },
+      data: { status: 'not_found' },
+    });
+    await bot.api.sendMessage(telegramId, 'Ваш аккаунт заблокирован. Обратитесь в поддержку.');
+    return;
+  }
+  await prisma.telegramBotLoginToken.update({
+    where: { token },
+    data: { status: 'done', userId: user.id },
+  });
+  await bot.api.sendMessage(telegramId, '✅ Вы вошли в Tappjet! Вернитесь в приложение.');
+}
+
 export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | null = null) {
   async function sendOtp(phone: string): Promise<{ expiresInSec: number; debug_code?: string }> {
     const code = await createOtpRecord(prisma, phone);
@@ -225,5 +269,33 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     return issueFullAuthForUser(prisma, user.id, provider, deviceInfo);
   }
 
-  return { sendOtp, sendTelegramOtp, initTelegramLink, getTelegramLinkStatus, verifyOtp };
+  const BOT_LOGIN_TTL_SEC = 5 * 60;
+
+  async function initBotLogin(): Promise<{ token: string; deepLink: string; expiresInSec: number }> {
+    const token = generateUuid();
+    const expiresAt = new Date(Date.now() + BOT_LOGIN_TTL_SEC * 1000);
+    await prisma.telegramBotLoginToken.create({ data: { token, expiresAt } });
+    const deepLink = `https://t.me/${env.TELEGRAM_BOT_USERNAME}?start=bl_${token}`;
+    return { token, deepLink, expiresInSec: BOT_LOGIN_TTL_SEC };
+  }
+
+  async function getBotLoginStatus(token: string): Promise<{ status: 'waiting' | 'done' | 'expired' | 'not_found' }> {
+    const record = await prisma.telegramBotLoginToken.findUnique({ where: { token } });
+    if (!record || record.expiresAt.getTime() <= Date.now()) return { status: 'expired' };
+    return { status: record.status as 'waiting' | 'done' | 'expired' | 'not_found' };
+  }
+
+  async function claimBotLogin(token: string, deviceInfo?: string): Promise<AuthResult> {
+    const record = await prisma.telegramBotLoginToken.findUnique({ where: { token } });
+    if (!record || record.status !== 'done' || !record.userId || record.expiresAt.getTime() <= Date.now()) {
+      throw Errors.unauthorized({ reason: 'bot_login_invalid' });
+    }
+    await prisma.telegramBotLoginToken.update({
+      where: { token },
+      data: { status: 'used', expiresAt: new Date(0) },
+    });
+    return issueFullAuthForUser(prisma, record.userId, 'telegram', deviceInfo);
+  }
+
+  return { sendOtp, sendTelegramOtp, initTelegramLink, getTelegramLinkStatus, verifyOtp, initBotLogin, getBotLoginStatus, claimBotLogin };
 }

@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import { Bot, type Context } from 'grammy';
 import { env } from '@/config/env.js';
 import { logger } from '@/lib/logger.js';
-import { handleTelegramLinkToken } from '@/modules/auth/auth.otp.js';
+import { handleTelegramLinkToken, handleBotLoginToken } from '@/modules/auth/auth.otp.js';
 import type {
   Notifier,
   PublicBooking,
@@ -360,6 +360,12 @@ export async function startTelegramBot(prisma: PrismaClient): Promise<Bot | null
     if (payload?.startsWith('reg_') && ctx.from) {
       await handleTelegramLinkToken(prisma, bot, payload.slice(4), ctx.from.id).catch(
         (err: unknown) => logger.warn({ err }, 'handleTelegramLinkToken failed'),
+      );
+      return;
+    }
+    if (payload?.startsWith('bl_') && ctx.from) {
+      await handleBotLoginToken(prisma, bot, payload.slice(3), ctx.from.id).catch(
+        (err: unknown) => logger.warn({ err }, 'handleBotLoginToken failed'),
       );
       return;
     }

@@ -206,6 +206,35 @@ export function createAuthRouter(
     }),
   );
 
+  // ─── Telegram bot magic-link login ───────────────────────────────────
+  router.post(
+    '/telegram/bot-login/init',
+    telegramAuthLimit,
+    asyncHandler(async (req, res) => {
+      res.status(200).json(await service.initBotLogin());
+    }),
+  );
+
+  router.get(
+    '/telegram/bot-login/status',
+    validate({ query: z.object({ token: z.string().min(1).max(100) }) }),
+    asyncHandler(async (req, res) => {
+      const { token } = req.query as { token: string };
+      res.status(200).json(await service.getBotLoginStatus(token));
+    }),
+  );
+
+  router.post(
+    '/telegram/bot-login/claim',
+    telegramAuthLimit,
+    validate({ body: z.object({ token: z.string().min(1).max(100) }) }),
+    asyncHandler(async (req, res) => {
+      const { token } = req.body as { token: string };
+      const deviceInfo = req.headers['user-agent'];
+      res.status(200).json(await service.claimBotLogin(token, deviceInfo));
+    }),
+  );
+
   // ─── Telegram Bot OTP (login without password / forgot password) ─────
   router.post(
     '/telegram/otp/send',
