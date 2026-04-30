@@ -235,6 +235,32 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
           where: { phone, deletedAt: null, NOT: { id: existing.id } },
         });
         if (phoneOwner) {
+          // If the provisional user only has a placeholder phone (OAuth/Telegram signup),
+          // merge it into the verified phone account: transfer providers + telegramId, then
+          // soft-delete the placeholder account so the user ends up with one unified account.
+          if (existing.phone.startsWith('+prov:')) {
+            if (existing.telegramId) {
+              await tx.user.update({
+                where: { id: phoneOwner.id },
+                data: { telegramId: existing.telegramId },
+              });
+            }
+            await tx.authProvider.updateMany({
+              where: { userId: existing.id },
+              data: { userId: phoneOwner.id },
+            });
+            const tombstone = `+del:${generateUuid().slice(0, 12)}`;
+            await tx.user.update({
+              where: { id: existing.id },
+              data: { deletedAt: now, phone: tombstone },
+            });
+            await tx.refreshToken.updateMany({
+              where: { userId: existing.id, revokedAt: null },
+              data: { revokedAt: now },
+            });
+            logger.info({ provisionalId: existing.id, targetId: phoneOwner.id }, 'provisional account merged into phone account');
+            return tx.user.findUniqueOrThrow({ where: { id: phoneOwner.id } });
+          }
           throw Errors.conflict('Phone already linked to another account', {
             reason: 'phone_taken',
             existing_user_id: phoneOwner.id,
