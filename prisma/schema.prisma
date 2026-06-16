@@ -108,8 +108,7 @@ model Trip {
   originAddress        String    @map("origin_address") @db.VarChar(200)
   originLat            Float?    @map("origin_lat")
   originLng            Float?    @map("origin_lng")
-  originSubCities      String[]  @default([]) @map("origin_sub_cities")
-  destinationSubCities String[]  @default([]) @map("destination_sub_cities")
+  stopCities           String[]  @default([]) @map("stop_cities")
   waypoints            Json      @default("[]")
   departureAt          DateTime  @map("departure_at") @db.Timestamptz(6)
   departureFlexible    Boolean   @default(false) @map("departure_flexible")
@@ -136,8 +135,7 @@ model Trip {
   @@index([status])
   @@index([departureAt])
   @@index([originCity, destinationCity, departureAt, status], map: "idx_trips_search")
-  @@index([originSubCities], map: "idx_trips_origin_sub_cities", type: Gin)
-  @@index([destinationSubCities], map: "idx_trips_destination_sub_cities", type: Gin)
+  @@index([stopCities], map: "idx_trips_stop_cities", type: Gin)
   @@map("trips")
 }
 

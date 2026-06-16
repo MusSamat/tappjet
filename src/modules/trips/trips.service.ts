@@ -34,8 +34,7 @@ export interface TripListItem {
   };
   originCity: string;
   destinationCity: string;
-  originSubCities: string[];
-  destinationSubCities: string[];
+  stopCities: string[];
   originAddress: string;
   departureAt: Date;
   departureFlexible: boolean;
@@ -89,34 +88,27 @@ export function createTripsService(
   prisma: PrismaClient,
   notifier?: Notifier,
 ): TripsService {
-  // Validate driver-provided sub-cities: each must exist in the City directory
-  // and belong to the same region as the corresponding main city. Returns the
-  // normalized list (deduped, main city removed). No-op for empty input.
-  async function normalizeSubCities(
-    mainCity: string,
-    subCities: string[],
-    side: 'origin' | 'destination',
+  // Validate driver-provided stop cities (cities along the route): each must
+  // exist in the City directory and differ from the trip's own origin and
+  // destination. Stops may be in any region. Returns the deduped list.
+  async function normalizeStopCities(
+    originCity: string,
+    destinationCity: string,
+    stops: string[],
   ): Promise<string[]> {
-    const unique = [...new Set(subCities)].filter((c) => c !== mainCity);
+    const unique = [...new Set(stops)].filter(
+      (c) => c !== originCity && c !== destinationCity,
+    );
     if (unique.length === 0) return [];
 
     const rows = await prisma.city.findMany({
-      where: { nameRu: { in: [mainCity, ...unique] }, isActive: true },
-      select: { nameRu: true, regionId: true },
+      where: { nameRu: { in: unique }, isActive: true },
+      select: { nameRu: true },
     });
-    const regionByName = new Map(rows.map((r) => [r.nameRu, r.regionId]));
-
-    const mainRegion = regionByName.get(mainCity);
-    if (mainRegion === undefined) {
-      throw Errors.validation({ reason: 'unknown_city', side, city: mainCity });
-    }
+    const known = new Set(rows.map((r) => r.nameRu));
     for (const city of unique) {
-      const region = regionByName.get(city);
-      if (region === undefined) {
-        throw Errors.validation({ reason: 'unknown_sub_city', side, city });
-      }
-      if (region !== mainRegion) {
-        throw Errors.validation({ reason: 'sub_city_region_mismatch', side, city });
+      if (!known.has(city)) {
+        throw Errors.validation({ reason: 'unknown_stop_city', city });
       }
     }
     return unique;
@@ -197,10 +189,11 @@ export function createTripsService(
 
     const estimatedDurationMin = estimateDurationMin(body.originCity, body.destinationCity);
 
-    const [originSubCities, destinationSubCities] = await Promise.all([
-      normalizeSubCities(body.originCity, body.originSubCities, 'origin'),
-      normalizeSubCities(body.destinationCity, body.destinationSubCities, 'destination'),
-    ]);
+    const stopCities = await normalizeStopCities(
+      body.originCity,
+      body.destinationCity,
+      body.stopCities,
+    );
 
     try {
       const created = await prisma.trip.create({
@@ -211,8 +204,7 @@ export function createTripsService(
           originAddress: body.originAddress,
           originLat: body.originLat ?? null,
           originLng: body.originLng ?? null,
-          originSubCities,
-          destinationSubCities,
+          stopCities,
           waypoints: body.waypoints as Prisma.InputJsonValue,
           departureAt,
           departureFlexible: body.departureFlexible,
@@ -257,20 +249,17 @@ export function createTripsService(
       seatsAvailable: { gte: query.seats },
       departureAt: { gte: new Date() },
     };
-    // Match a city against its main column OR its sub-cities list, so a trip to
-    // Баткен that also serves Кадамжай surfaces for a Кадамжай search.
+    // A stop city counts as both a boarding point (matches from_city) and an
+    // alighting point (matches to_city), so en-route passengers find the trip.
     const cityFilters: Prisma.TripWhereInput[] = [];
     if (query.from_city) {
       cityFilters.push({
-        OR: [{ originCity: query.from_city }, { originSubCities: { has: query.from_city } }],
+        OR: [{ originCity: query.from_city }, { stopCities: { has: query.from_city } }],
       });
     }
     if (query.to_city) {
       cityFilters.push({
-        OR: [
-          { destinationCity: query.to_city },
-          { destinationSubCities: { has: query.to_city } },
-        ],
+        OR: [{ destinationCity: query.to_city }, { stopCities: { has: query.to_city } }],
       });
     }
     if (cityFilters.length > 0) where.AND = cityFilters;
@@ -700,8 +689,7 @@ function toListItem(row: TripRow): TripListItem {
     },
     originCity: row.originCity,
     destinationCity: row.destinationCity,
-    originSubCities: row.originSubCities,
-    destinationSubCities: row.destinationSubCities,
+    stopCities: row.stopCities,
     originAddress: row.originAddress,
     departureAt: row.departureAt,
     departureFlexible: row.departureFlexible,
