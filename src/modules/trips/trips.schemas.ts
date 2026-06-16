@@ -14,6 +14,11 @@ export const Waypoint = z.object({
   address: z.string().trim().max(200).optional(),
 });
 
+// Extra settlements near origin/destination the driver also serves (e.g. a
+// trip to Баткен that also drops at Кадамжай). Existence + region membership
+// is validated at the service level against the City directory.
+const SubCities = z.array(CityName).max(5).default([]);
+
 export const TripCreateBody = z
   .object({
     originCity: CityName,
@@ -21,6 +26,8 @@ export const TripCreateBody = z
     originAddress: z.string().trim().min(1).max(200),
     originLat: z.number().min(-90).max(90).optional(),
     originLng: z.number().min(-180).max(180).optional(),
+    originSubCities: SubCities,
+    destinationSubCities: SubCities,
     waypoints: z.array(Waypoint).max(3).default([]),
     departureAt: z.string().datetime({ offset: true }),
     departureFlexible: z.boolean().default(false),

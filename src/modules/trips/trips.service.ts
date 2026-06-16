@@ -34,6 +34,8 @@ export interface TripListItem {
   };
   originCity: string;
   destinationCity: string;
+  originSubCities: string[];
+  destinationSubCities: string[];
   originAddress: string;
   departureAt: Date;
   departureFlexible: boolean;
@@ -87,6 +89,39 @@ export function createTripsService(
   prisma: PrismaClient,
   notifier?: Notifier,
 ): TripsService {
+  // Validate driver-provided sub-cities: each must exist in the City directory
+  // and belong to the same region as the corresponding main city. Returns the
+  // normalized list (deduped, main city removed). No-op for empty input.
+  async function normalizeSubCities(
+    mainCity: string,
+    subCities: string[],
+    side: 'origin' | 'destination',
+  ): Promise<string[]> {
+    const unique = [...new Set(subCities)].filter((c) => c !== mainCity);
+    if (unique.length === 0) return [];
+
+    const rows = await prisma.city.findMany({
+      where: { nameRu: { in: [mainCity, ...unique] }, isActive: true },
+      select: { nameRu: true, regionId: true },
+    });
+    const regionByName = new Map(rows.map((r) => [r.nameRu, r.regionId]));
+
+    const mainRegion = regionByName.get(mainCity);
+    if (mainRegion === undefined) {
+      throw Errors.validation({ reason: 'unknown_city', side, city: mainCity });
+    }
+    for (const city of unique) {
+      const region = regionByName.get(city);
+      if (region === undefined) {
+        throw Errors.validation({ reason: 'unknown_sub_city', side, city });
+      }
+      if (region !== mainRegion) {
+        throw Errors.validation({ reason: 'sub_city_region_mismatch', side, city });
+      }
+    }
+    return unique;
+  }
+
   // ─── Create ─────────────────────────────────────────────────────────
   async function create(
     driverUserId: string,
@@ -162,6 +197,11 @@ export function createTripsService(
 
     const estimatedDurationMin = estimateDurationMin(body.originCity, body.destinationCity);
 
+    const [originSubCities, destinationSubCities] = await Promise.all([
+      normalizeSubCities(body.originCity, body.originSubCities, 'origin'),
+      normalizeSubCities(body.destinationCity, body.destinationSubCities, 'destination'),
+    ]);
+
     try {
       const created = await prisma.trip.create({
         data: {
@@ -171,6 +211,8 @@ export function createTripsService(
           originAddress: body.originAddress,
           originLat: body.originLat ?? null,
           originLng: body.originLng ?? null,
+          originSubCities,
+          destinationSubCities,
           waypoints: body.waypoints as Prisma.InputJsonValue,
           departureAt,
           departureFlexible: body.departureFlexible,
@@ -215,8 +257,23 @@ export function createTripsService(
       seatsAvailable: { gte: query.seats },
       departureAt: { gte: new Date() },
     };
-    if (query.from_city) where.originCity = query.from_city;
-    if (query.to_city) where.destinationCity = query.to_city;
+    // Match a city against its main column OR its sub-cities list, so a trip to
+    // Баткен that also serves Кадамжай surfaces for a Кадамжай search.
+    const cityFilters: Prisma.TripWhereInput[] = [];
+    if (query.from_city) {
+      cityFilters.push({
+        OR: [{ originCity: query.from_city }, { originSubCities: { has: query.from_city } }],
+      });
+    }
+    if (query.to_city) {
+      cityFilters.push({
+        OR: [
+          { destinationCity: query.to_city },
+          { destinationSubCities: { has: query.to_city } },
+        ],
+      });
+    }
+    if (cityFilters.length > 0) where.AND = cityFilters;
     if (query.date) {
       const start = new Date(query.date);
       const end = new Date(start.getTime() + 24 * 60 * 60_000);
@@ -643,6 +700,8 @@ function toListItem(row: TripRow): TripListItem {
     },
     originCity: row.originCity,
     destinationCity: row.destinationCity,
+    originSubCities: row.originSubCities,
+    destinationSubCities: row.destinationSubCities,
     originAddress: row.originAddress,
     departureAt: row.departureAt,
     departureFlexible: row.departureFlexible,

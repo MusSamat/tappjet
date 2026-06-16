@@ -218,6 +218,8 @@ export async function seedLaunchCities(prisma: PrismaClient): Promise<void> {
     { id: 4, nameRu: 'Ош', nameKg: 'Ош', nameEn: 'Osh', type: 'city', regionId: 8, regionNameRu: 'Ош', regionNameKg: 'Ош', prompt: [] },
     { id: 209, nameRu: 'Каракол', nameKg: 'Каракол', nameEn: 'Karakol', type: 'city', regionId: 2, regionNameRu: 'Иссык-Кульская область', regionNameKg: 'Ысык-Көл облусу', prompt: [] },
     { id: 3, nameRu: 'Нарын', nameKg: 'Нарын', nameEn: 'Naryn', type: 'city', regionId: 3, regionNameRu: 'Нарынская область', regionNameKg: 'Нарын облусу', prompt: [] },
+    { id: 8, nameRu: 'Баткен', nameKg: 'Баткен', nameEn: 'Batken', type: 'city', regionId: 5, regionNameRu: 'Баткенская область', regionNameKg: 'Баткен облусу', prompt: [] },
+    { id: 501, nameRu: 'Кадамжай', nameKg: 'Кадамжай', nameEn: 'Kadamjai', type: 'city', regionId: 5, regionNameRu: 'Баткенская область', regionNameKg: 'Баткен облусу', prompt: [] },
   ] as const;
   for (const c of cities) {
     await prisma.city.upsert({

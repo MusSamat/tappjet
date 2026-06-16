@@ -395,6 +395,106 @@ describe('GET /v1/trips (search)', () => {
   });
 });
 
+describe('Trip sub-cities (под-города)', () => {
+  function batkenTrip(driverId: string, subCities: string[]) {
+    return {
+      driverId,
+      originCity: 'Бишкек',
+      destinationCity: 'Баткен',
+      destinationSubCities: subCities,
+      originAddress: 'x',
+      departureAt: new Date(Date.now() + 3 * 60 * 60_000),
+      estimatedDurationMin: 780,
+      seatsTotal: 3,
+      seatsAvailable: 3,
+      pricePerSeat: 1500,
+      luggage: 'no',
+      status: 'active',
+    };
+  }
+
+  it('creates a trip with a destination sub-city in the same region', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: 'SC1' });
+    const res = await request(app)
+      .post('/v1/trips')
+      .set('Authorization', `Bearer ${d.accessToken}`)
+      .set('Idempotency-Key', idempotencyKey())
+      .send(tripPayload({ destinationCity: 'Баткен', destinationSubCities: ['Кадамжай'] }));
+    expect(res.status).toBe(201);
+    expect(res.body.destinationSubCities).toEqual(['Кадамжай']);
+  });
+
+  it('rejects a sub-city from a different region', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: 'SC2' });
+    const res = await request(app)
+      .post('/v1/trips')
+      .set('Authorization', `Bearer ${d.accessToken}`)
+      .set('Idempotency-Key', idempotencyKey())
+      .send(tripPayload({ destinationCity: 'Баткен', destinationSubCities: ['Каракол'] }));
+    expect(res.status).toBe(400);
+    expect(res.body.error.details.reason).toBe('sub_city_region_mismatch');
+  });
+
+  it('rejects an unknown sub-city', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: 'SC3' });
+    const res = await request(app)
+      .post('/v1/trips')
+      .set('Authorization', `Bearer ${d.accessToken}`)
+      .set('Idempotency-Key', idempotencyKey())
+      .send(tripPayload({ destinationCity: 'Баткен', destinationSubCities: ['Неизвестный'] }));
+    expect(res.status).toBe(400);
+    expect(res.body.error.details.reason).toBe('unknown_sub_city');
+  });
+
+  it('search by a sub-city returns the parent trip (Бишкек→Баткен via Кадамжай)', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: 'SC4' });
+    await testPrisma.trip.create({ data: batkenTrip(d.id, ['Кадамжай']) });
+    const caller = await createUser(testPrisma);
+    const res = await request(app)
+      .get('/v1/trips?from_city=Бишкек&to_city=Кадамжай')
+      .set('Authorization', `Bearer ${caller.accessToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].destinationCity).toBe('Баткен');
+    expect(res.body.data[0].destinationSubCities).toEqual(['Кадамжай']);
+  });
+
+  it('search by the exact destination still returns the trip', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: 'SC5' });
+    await testPrisma.trip.create({ data: batkenTrip(d.id, ['Кадамжай']) });
+    const caller = await createUser(testPrisma);
+    const res = await request(app)
+      .get('/v1/trips?from_city=Бишкек&to_city=Баткен')
+      .set('Authorization', `Bearer ${caller.accessToken}`);
+    expect(res.body.data).toHaveLength(1);
+  });
+
+  it('GET /cities/:id/sub-cities lists same-region cities excluding itself', async () => {
+    const caller = await createUser(testPrisma);
+    // Баткен has id 8 in the launch seed; Кадамжай (id 501) shares region 5.
+    const res = await request(app)
+      .get('/v1/cities/8/sub-cities')
+      .set('Authorization', `Bearer ${caller.accessToken}`);
+    expect(res.status).toBe(200);
+    const names = res.body.data.map((c: { nameRu: string }) => c.nameRu);
+    expect(names).toContain('Кадамжай');
+    expect(names).not.toContain('Баткен');
+  });
+
+  it('GET /cities/:id/sub-cities?q filters within the region', async () => {
+    const caller = await createUser(testPrisma);
+    const hit = await request(app)
+      .get('/v1/cities/8/sub-cities?q=кад')
+      .set('Authorization', `Bearer ${caller.accessToken}`);
+    expect(hit.body.data.map((c: { nameRu: string }) => c.nameRu)).toEqual(['Кадамжай']);
+
+    const miss = await request(app)
+      .get('/v1/cities/8/sub-cities?q=zzz')
+      .set('Authorization', `Bearer ${caller.accessToken}`);
+    expect(miss.body.data).toEqual([]);
+  });
+});
+
 describe('GET /v1/trips/:id', () => {
   it('returns detail + recent ratings', async () => {
     const d = await createVerifiedDriver(testPrisma, { plate: 'GT1' });
