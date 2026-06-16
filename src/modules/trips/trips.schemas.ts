@@ -14,10 +14,10 @@ export const Waypoint = z.object({
   address: z.string().trim().max(200).optional(),
 });
 
-// Cities the trip passes through (any region) — the driver picks them so a
-// passenger boarding/alighting en route can find the trip. Existence is
-// validated at the service level against the City directory.
-const StopCities = z.array(CityName).max(6).default([]);
+// Extra route points (any region): pickupCities = where the driver can still
+// board passengers (origin side), dropoffCities = where the driver can drop
+// passengers (destination side). Existence is validated at the service level.
+const RouteCities = z.array(CityName).max(5).default([]);
 
 export const TripCreateBody = z
   .object({
@@ -26,7 +26,8 @@ export const TripCreateBody = z
     originAddress: z.string().trim().min(1).max(200),
     originLat: z.number().min(-90).max(90).optional(),
     originLng: z.number().min(-180).max(180).optional(),
-    stopCities: StopCities,
+    pickupCities: RouteCities,
+    dropoffCities: RouteCities,
     waypoints: z.array(Waypoint).max(3).default([]),
     departureAt: z.string().datetime({ offset: true }),
     departureFlexible: z.boolean().default(false),

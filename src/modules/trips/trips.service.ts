@@ -34,7 +34,8 @@ export interface TripListItem {
   };
   originCity: string;
   destinationCity: string;
-  stopCities: string[];
+  pickupCities: string[];
+  dropoffCities: string[];
   originAddress: string;
   departureAt: Date;
   departureFlexible: boolean;
@@ -88,17 +89,15 @@ export function createTripsService(
   prisma: PrismaClient,
   notifier?: Notifier,
 ): TripsService {
-  // Validate driver-provided stop cities (cities along the route): each must
-  // exist in the City directory and differ from the trip's own origin and
-  // destination. Stops may be in any region. Returns the deduped list.
-  async function normalizeStopCities(
-    originCity: string,
-    destinationCity: string,
-    stops: string[],
+  // Validate driver-provided route cities (pickup/dropoff points): each must
+  // exist in the City directory and not be the trip's own origin/destination.
+  // Any region is allowed. Returns the deduped list.
+  async function normalizeRouteCities(
+    exclude: string[],
+    cities: string[],
   ): Promise<string[]> {
-    const unique = [...new Set(stops)].filter(
-      (c) => c !== originCity && c !== destinationCity,
-    );
+    const excluded = new Set(exclude);
+    const unique = [...new Set(cities)].filter((c) => !excluded.has(c));
     if (unique.length === 0) return [];
 
     const rows = await prisma.city.findMany({
@@ -108,7 +107,7 @@ export function createTripsService(
     const known = new Set(rows.map((r) => r.nameRu));
     for (const city of unique) {
       if (!known.has(city)) {
-        throw Errors.validation({ reason: 'unknown_stop_city', city });
+        throw Errors.validation({ reason: 'unknown_route_city', city });
       }
     }
     return unique;
@@ -189,11 +188,11 @@ export function createTripsService(
 
     const estimatedDurationMin = estimateDurationMin(body.originCity, body.destinationCity);
 
-    const stopCities = await normalizeStopCities(
-      body.originCity,
-      body.destinationCity,
-      body.stopCities,
-    );
+    const exclude = [body.originCity, body.destinationCity];
+    const [pickupCities, dropoffCities] = await Promise.all([
+      normalizeRouteCities(exclude, body.pickupCities),
+      normalizeRouteCities(exclude, body.dropoffCities),
+    ]);
 
     try {
       const created = await prisma.trip.create({
@@ -204,7 +203,8 @@ export function createTripsService(
           originAddress: body.originAddress,
           originLat: body.originLat ?? null,
           originLng: body.originLng ?? null,
-          stopCities,
+          pickupCities,
+          dropoffCities,
           waypoints: body.waypoints as Prisma.InputJsonValue,
           departureAt,
           departureFlexible: body.departureFlexible,
@@ -249,17 +249,18 @@ export function createTripsService(
       seatsAvailable: { gte: query.seats },
       departureAt: { gte: new Date() },
     };
-    // A stop city counts as both a boarding point (matches from_city) and an
-    // alighting point (matches to_city), so en-route passengers find the trip.
+    // Mirror match: from_city = a boarding point (origin or a pickup city);
+    // to_city = an alighting point (destination or a dropoff city). A dropoff
+    // city does NOT make the trip boardable there, and vice versa.
     const cityFilters: Prisma.TripWhereInput[] = [];
     if (query.from_city) {
       cityFilters.push({
-        OR: [{ originCity: query.from_city }, { stopCities: { has: query.from_city } }],
+        OR: [{ originCity: query.from_city }, { pickupCities: { has: query.from_city } }],
       });
     }
     if (query.to_city) {
       cityFilters.push({
-        OR: [{ destinationCity: query.to_city }, { stopCities: { has: query.to_city } }],
+        OR: [{ destinationCity: query.to_city }, { dropoffCities: { has: query.to_city } }],
       });
     }
     if (cityFilters.length > 0) where.AND = cityFilters;
@@ -689,7 +690,8 @@ function toListItem(row: TripRow): TripListItem {
     },
     originCity: row.originCity,
     destinationCity: row.destinationCity,
-    stopCities: row.stopCities,
+    pickupCities: row.pickupCities,
+    dropoffCities: row.dropoffCities,
     originAddress: row.originAddress,
     departureAt: row.departureAt,
     departureFlexible: row.departureFlexible,

@@ -395,13 +395,15 @@ describe('GET /v1/trips (search)', () => {
   });
 });
 
-describe('Trip stop cities (города по пути)', () => {
-  function batkenTrip(driverId: string, stopCities: string[]) {
+describe('Trip pickup/dropoff cities (посадка/высадка по пути)', () => {
+  // Бишкек→Баткен with a pickup point (board en route) and a dropoff point.
+  function batkenTrip(driverId: string, pickupCities: string[], dropoffCities: string[]) {
     return {
       driverId,
       originCity: 'Бишкек',
       destinationCity: 'Баткен',
-      stopCities,
+      pickupCities,
+      dropoffCities,
       originAddress: 'x',
       departureAt: new Date(Date.now() + 3 * 60 * 60_000),
       estimatedDurationMin: 780,
@@ -413,66 +415,77 @@ describe('Trip stop cities (города по пути)', () => {
     };
   }
 
-  it('creates a trip with a stop city from any region', async () => {
+  it('creates a trip with pickup/dropoff cities from any region', async () => {
     const d = await createVerifiedDriver(testPrisma, { plate: 'SC1' });
     const res = await request(app)
       .post('/v1/trips')
       .set('Authorization', `Bearer ${d.accessToken}`)
       .set('Idempotency-Key', idempotencyKey())
-      // Ош (region 8) differs from both Бишкек (7) and Баткен (5) — allowed.
-      .send(tripPayload({ destinationCity: 'Баткен', stopCities: ['Ош'] }));
+      .send(
+        tripPayload({ destinationCity: 'Баткен', pickupCities: ['Нарын'], dropoffCities: ['Ош'] }),
+      );
     expect(res.status).toBe(201);
-    expect(res.body.stopCities).toEqual(['Ош']);
+    expect(res.body.pickupCities).toEqual(['Нарын']);
+    expect(res.body.dropoffCities).toEqual(['Ош']);
   });
 
-  it('rejects an unknown stop city', async () => {
+  it('rejects an unknown route city', async () => {
     const d = await createVerifiedDriver(testPrisma, { plate: 'SC2' });
     const res = await request(app)
       .post('/v1/trips')
       .set('Authorization', `Bearer ${d.accessToken}`)
       .set('Idempotency-Key', idempotencyKey())
-      .send(tripPayload({ destinationCity: 'Баткен', stopCities: ['Неизвестный'] }));
+      .send(tripPayload({ destinationCity: 'Баткен', dropoffCities: ['Неизвестный'] }));
     expect(res.status).toBe(400);
-    expect(res.body.error.details.reason).toBe('unknown_stop_city');
+    expect(res.body.error.details.reason).toBe('unknown_route_city');
   });
 
-  it('drops stop cities equal to origin or destination', async () => {
+  it('drops route cities equal to origin or destination', async () => {
     const d = await createVerifiedDriver(testPrisma, { plate: 'SC3' });
     const res = await request(app)
       .post('/v1/trips')
       .set('Authorization', `Bearer ${d.accessToken}`)
       .set('Idempotency-Key', idempotencyKey())
-      .send(tripPayload({ destinationCity: 'Баткен', stopCities: ['Бишкек', 'Ош', 'Баткен'] }));
+      .send(tripPayload({ destinationCity: 'Баткен', pickupCities: ['Бишкек', 'Нарын', 'Баткен'] }));
     expect(res.status).toBe(201);
-    expect(res.body.stopCities).toEqual(['Ош']);
+    expect(res.body.pickupCities).toEqual(['Нарын']);
   });
 
-  it('finds the trip when searching a stop as the destination', async () => {
+  it('matches a pickup city as the search origin', async () => {
     const d = await createVerifiedDriver(testPrisma, { plate: 'SC4' });
-    await testPrisma.trip.create({ data: batkenTrip(d.id, ['Ош']) });
+    await testPrisma.trip.create({ data: batkenTrip(d.id, ['Нарын'], ['Ош']) });
+    const caller = await createUser(testPrisma);
+    const res = await request(app)
+      .get('/v1/trips?from_city=Нарын&to_city=Баткен')
+      .set('Authorization', `Bearer ${caller.accessToken}`);
+    expect(res.body.data).toHaveLength(1);
+  });
+
+  it('matches a dropoff city as the search destination', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: 'SC5' });
+    await testPrisma.trip.create({ data: batkenTrip(d.id, ['Нарын'], ['Ош']) });
     const caller = await createUser(testPrisma);
     const res = await request(app)
       .get('/v1/trips?from_city=Бишкек&to_city=Ош')
       .set('Authorization', `Bearer ${caller.accessToken}`);
-    expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].destinationCity).toBe('Баткен');
-    expect(res.body.data[0].stopCities).toEqual(['Ош']);
+    expect(res.body.data[0].dropoffCities).toEqual(['Ош']);
   });
 
-  it('finds the trip when searching a stop as the origin', async () => {
-    const d = await createVerifiedDriver(testPrisma, { plate: 'SC5' });
-    await testPrisma.trip.create({ data: batkenTrip(d.id, ['Ош']) });
+  it('does NOT match a dropoff city used as the search origin (mirror)', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: 'SC6' });
+    await testPrisma.trip.create({ data: batkenTrip(d.id, ['Нарын'], ['Ош']) });
     const caller = await createUser(testPrisma);
+    // Ош is only a dropoff point — a passenger cannot board there.
     const res = await request(app)
       .get('/v1/trips?from_city=Ош&to_city=Баткен')
       .set('Authorization', `Bearer ${caller.accessToken}`);
-    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data).toHaveLength(0);
   });
 
   it('search by the exact route still returns the trip', async () => {
-    const d = await createVerifiedDriver(testPrisma, { plate: 'SC6' });
-    await testPrisma.trip.create({ data: batkenTrip(d.id, ['Ош']) });
+    const d = await createVerifiedDriver(testPrisma, { plate: 'SC7' });
+    await testPrisma.trip.create({ data: batkenTrip(d.id, ['Нарын'], ['Ош']) });
     const caller = await createUser(testPrisma);
     const res = await request(app)
       .get('/v1/trips?from_city=Бишкек&to_city=Баткен')
