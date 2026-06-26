@@ -11,7 +11,7 @@ const SOCIAL_PATTERNS: RegExp[] = [
   /(?:telegram|whatsapp|instagram|insta|vk|вк|телеграм|ватсап)(?:\s*[:\-@#]\s*)[\w.@]+/gi,
 ];
 
-const REDACTED = '[ссылка скрыта]';
+const REDACTED = '[скрыто]';
 
 export function filterSocialLinks(text: string): { filtered: string; redacted: boolean } {
   let filtered = text;

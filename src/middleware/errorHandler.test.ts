@@ -27,7 +27,8 @@ describe('globalErrorHandler', () => {
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('SEATS_NOT_AVAILABLE');
     expect(res.body.error.message).toMatch(/Свободных/);
-    expect(res.body.error.message_kg).toMatch(/Бош/);
+    expect(res.body.error.message_ky).toMatch(/Бош/); // TZ §22.2 contract key
+    expect(res.body.error.message_kg).toMatch(/Бош/); // legacy alias
     expect(res.body.error.details.seats_requested).toBe(2);
     expect(res.body.error.request_id).toBeDefined();
   });

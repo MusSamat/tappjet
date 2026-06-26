@@ -1,7 +1,11 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { Errors } from '@/lib/errors.js';
-import { persistImage, removeImage, toFileUrl } from '@/lib/uploads.js';
+import { assertMinDimensions, persistImage, removeImage, toFileUrl } from '@/lib/uploads.js';
 import type { DriverVerificationInput } from './drivers.schemas.js';
+
+// TZ §9.1/§9.3 — document photos must be at least 800×600.
+const DOC_MIN_WIDTH = 800;
+const DOC_MIN_HEIGHT = 600;
 
 /**
  * Driver verification flow — TZ §9.
@@ -76,27 +80,12 @@ export function createDriverService(prisma: PrismaClient): DriverService {
     body: DriverVerificationInput,
     files: SubmissionFiles,
   ): Promise<{ status: string }> {
-    // Enforce unique plate (TZ §9.3 "Госномер не существует в car_plate (UNIQUE)").
-    // Check BEFORE writing files to disk — avoids orphaned blobs on conflict.
-    const plateOwner = await prisma.driverProfile.findUnique({
-      where: { carPlate: body.carPlate },
-      select: { userId: true },
-    });
-    if (plateOwner && plateOwner.userId !== userId) {
-      throw Errors.conflict('Этот номер уже зарегистрирован', {
-        reason: 'plate_taken',
-        field: 'carPlate',
-      });
-    }
-
-    const existing = await prisma.driverProfile.findUnique({ where: { userId } });
-    // Can't submit while already verified/pending (re-submit allowed after reject).
-    if (existing && ['pending', 'verified'].includes(existing.verificationStatus)) {
-      throw Errors.conflict('Заявка уже в работе либо одобрена', {
-        reason: 'already_active',
-        current_status: existing.verificationStatus,
-      });
-    }
+    // Validate all four document dimensions BEFORE any disk write — a failure
+    // here must not leave orphaned blobs behind (TZ §9.1 min 800×600).
+    assertMinDimensions(files.license, DOC_MIN_WIDTH, DOC_MIN_HEIGHT);
+    assertMinDimensions(files.car_passport, DOC_MIN_WIDTH, DOC_MIN_HEIGHT);
+    assertMinDimensions(files.car_photo, DOC_MIN_WIDTH, DOC_MIN_HEIGHT);
+    assertMinDimensions(files.selfie, DOC_MIN_WIDTH, DOC_MIN_HEIGHT);
 
     // Persist the four images first so we have their paths for the DB row.
     const [license, carPassport, carPhoto, selfie] = await Promise.all([
@@ -106,61 +95,88 @@ export function createDriverService(prisma: PrismaClient): DriverService {
       persistImage(files.selfie, 'selfie'),
     ]);
 
-    try {
-      const now = new Date();
-      const photoPaths = {
-        licensePhotoPath: license.path,
-        carPassportPath: carPassport.path,
-        carPhotoPath: carPhoto.path,
-        selfiePath: selfie.path,
-      };
+    // Old photo paths to clean up after a successful resubmission commit.
+    let oldPhotoPaths: Array<string | null> = [];
 
-      if (existing) {
-        // Resubmission after rejection — overwrite in place and clean up old
-        // photo files so disk doesn't leak.
-        const old = existing;
-        await prisma.driverProfile.update({
-          where: { userId },
-          data: {
-            carMake: body.carMake,
-            carModel: body.carModel,
-            carYear: body.carYear,
-            carColor: body.carColor,
-            carPlate: body.carPlate,
-            seatsCount: body.seatsCount,
-            ...photoPaths,
-            verificationStatus: 'pending',
-            rejectionReason: null,
-            requestedDocs: { set: [] },
-            submittedAt: now,
-            verifiedAt: null,
-            verifiedBy: null,
-          },
+    try {
+      // TZ §9.1 "Транзакция: создание driver_profile со статусом pending."
+      // The plate-uniqueness + state checks run inside the same transaction as
+      // the write so two concurrent submissions can't both pass the check.
+      await prisma.$transaction(async (tx) => {
+        const plateOwner = await tx.driverProfile.findUnique({
+          where: { carPlate: body.carPlate },
+          select: { userId: true },
         });
-        await Promise.all([
-          removeImage(old.licensePhotoPath),
-          removeImage(old.carPassportPath),
-          removeImage(old.carPhotoPath),
-          removeImage(old.selfiePath),
-        ]);
-      } else {
-        await prisma.driverProfile.create({
-          data: {
-            carMake: body.carMake,
-            carModel: body.carModel,
-            carYear: body.carYear,
-            carColor: body.carColor,
-            carPlate: body.carPlate,
-            seatsCount: body.seatsCount,
-            ...photoPaths,
-            verificationStatus: 'pending',
-            submittedAt: now,
-            user: { connect: { id: userId } },
-          },
-        });
-      }
+        if (plateOwner && plateOwner.userId !== userId) {
+          throw Errors.conflict('Этот номер уже зарегистрирован', {
+            reason: 'plate_taken',
+            field: 'carPlate',
+          });
+        }
+
+        const existing = await tx.driverProfile.findUnique({ where: { userId } });
+        // Can't submit while already verified/pending (re-submit allowed after reject).
+        if (existing && ['pending', 'verified'].includes(existing.verificationStatus)) {
+          throw Errors.conflict('Заявка уже в работе либо одобрена', {
+            reason: 'already_active',
+            current_status: existing.verificationStatus,
+          });
+        }
+
+        const now = new Date();
+        const photoPaths = {
+          licensePhotoPath: license.path,
+          carPassportPath: carPassport.path,
+          carPhotoPath: carPhoto.path,
+          selfiePath: selfie.path,
+        };
+
+        if (existing) {
+          // Resubmission after rejection — overwrite in place; remember old
+          // blobs to remove after commit so disk doesn't leak.
+          oldPhotoPaths = [
+            existing.licensePhotoPath,
+            existing.carPassportPath,
+            existing.carPhotoPath,
+            existing.selfiePath,
+          ];
+          await tx.driverProfile.update({
+            where: { userId },
+            data: {
+              carMake: body.carMake,
+              carModel: body.carModel,
+              carYear: body.carYear,
+              carColor: body.carColor,
+              carPlate: body.carPlate,
+              seatsCount: body.seatsCount,
+              ...photoPaths,
+              verificationStatus: 'pending',
+              rejectionReason: null,
+              requestedDocs: { set: [] },
+              submittedAt: now,
+              verifiedAt: null,
+              verifiedBy: null,
+            },
+          });
+        } else {
+          await tx.driverProfile.create({
+            data: {
+              carMake: body.carMake,
+              carModel: body.carModel,
+              carYear: body.carYear,
+              carColor: body.carColor,
+              carPlate: body.carPlate,
+              seatsCount: body.seatsCount,
+              ...photoPaths,
+              verificationStatus: 'pending',
+              submittedAt: now,
+              user: { connect: { id: userId } },
+            },
+          });
+        }
+      });
     } catch (err) {
-      // Roll back the freshly-written blobs if the DB write failed.
+      // Roll back the freshly-written blobs if the transaction failed.
       await Promise.all([
         removeImage(license.path),
         removeImage(carPassport.path),
@@ -169,6 +185,9 @@ export function createDriverService(prisma: PrismaClient): DriverService {
       ]);
       throw err;
     }
+
+    // Commit succeeded — clean up the replaced files (resubmission only).
+    if (oldPhotoPaths.length) await Promise.all(oldPhotoPaths.map(removeImage));
 
     return { status: 'pending' };
   }
@@ -226,6 +245,7 @@ export function createDriverService(prisma: PrismaClient): DriverService {
       });
     }
 
+    assertMinDimensions(file, DOC_MIN_WIDTH, DOC_MIN_HEIGHT);
     const stored = await persistImage(file, category);
 
     // Remove from requestedDocs; if list is empty afterwards, flip back to pending.

@@ -3,11 +3,7 @@ import request from 'supertest';
 import type { Express } from 'express';
 import { testPrisma } from '../../../tests/setup.js';
 import { createApp } from '@/server.js';
-import {
-  createUser,
-  createVerifiedDriver,
-  seedLaunchCities,
-} from '../../../tests/factories.js';
+import { createUser, createVerifiedDriver, seedLaunchCities } from '../../../tests/factories.js';
 import { NoopNotifier } from '@/lib/notifier.js';
 
 let app: Express;
@@ -25,7 +21,9 @@ async function setupAcceptedBooking(): Promise<{
   bookingId: string;
   tripId: string;
 }> {
-  const driver = await createVerifiedDriver(testPrisma, { plate: `CH${Math.floor(Math.random() * 1e5)}` });
+  const driver = await createVerifiedDriver(testPrisma, {
+    plate: `CH${Math.floor(Math.random() * 1e5)}`,
+  });
   const trip = await testPrisma.trip.create({
     data: {
       driverId: driver.id,
@@ -78,7 +76,7 @@ describe('POST /v1/chats/:booking_id/messages (REST fallback)', () => {
       .set('Authorization', `Bearer ${ctx.passenger.accessToken}`)
       .send({ text: 'позвони мне +996 700 123 456' });
     expect(res.status).toBe(201);
-    expect(res.body.message.text).toContain('[номер скрыт]');
+    expect(res.body.message.text).toContain('[скрыто]');
   });
 
   it('allows writing in pre-booking phase (pending) — TZ §13', async () => {
@@ -109,6 +107,37 @@ describe('POST /v1/chats/:booking_id/messages (REST fallback)', () => {
       .send({ text: 'Привет, место актуально?' });
     expect(res.status).toBe(201);
     expect(res.body.message.chatPhase).toBe('pre_booking');
+  });
+
+  it('forbids the driver from writing in pre-booking phase — TZ §13.1', async () => {
+    const driver = await createVerifiedDriver(testPrisma, { plate: 'PEN2' });
+    const trip = await testPrisma.trip.create({
+      data: {
+        driverId: driver.id,
+        originCity: 'Бишкек',
+        destinationCity: 'Ош',
+        originAddress: 'x',
+        departureAt: new Date(Date.now() + 4 * 60 * 60_000),
+        estimatedDurationMin: 600,
+        seatsTotal: 3,
+        seatsAvailable: 3,
+        pricePerSeat: 800,
+        luggage: 'no',
+        status: 'active',
+      },
+    });
+    const p = await createUser(testPrisma);
+    const b = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
+    // Driver tries to message before accepting — must be rejected.
+    const res = await request(app)
+      .post(`/v1/chats/${b.body.id}/messages`)
+      .set('Authorization', `Bearer ${driver.accessToken}`)
+      .send({ text: 'Привет' });
+    expect(res.status).toBe(403);
+    expect(res.body.error.details.reason).toBe('driver_cannot_write_pre_booking');
   });
 
   it('forbids writing from a non-participant', async () => {

@@ -41,22 +41,31 @@ export const VerifyOtpBody = z.object({
   deviceInfo: z.string().max(300).optional(),
 });
 
+// refreshToken is optional: web clients (channel = 'web') carry it in an
+// HttpOnly cookie instead of the body.
 export const RefreshBody = z.object({
-  refreshToken: z.string().min(1),
+  refreshToken: z.string().min(1).optional(),
+  channel: z.enum(['mobile', 'web']).default('mobile'),
 });
 
 export const LogoutBody = z.object({
-  refreshToken: z.string().min(1),
+  refreshToken: z.string().min(1).optional(),
+  channel: z.enum(['mobile', 'web']).default('mobile'),
 });
 
 export const AdminLoginBody = z.object({
   email: z.string().email().max(200),
   password: z.string().min(8).max(200),
-  totp: z.string().regex(/^\d{6}$/).optional(),
+  totp: z
+    .string()
+    .regex(/^\d{6}$/)
+    .optional(),
+  channel: z.enum(['mobile', 'web']).default('mobile'),
 });
 
 export const AdminRefreshBody = z.object({
-  refreshToken: z.string().min(1),
+  refreshToken: z.string().min(1).optional(),
+  channel: z.enum(['mobile', 'web']).default('mobile'),
 });
 
 // TZ v2.1 §8.12 — /users/me/password.

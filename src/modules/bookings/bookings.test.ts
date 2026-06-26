@@ -3,11 +3,7 @@ import request from 'supertest';
 import type { Express } from 'express';
 import { testPrisma } from '../../../tests/setup.js';
 import { createApp } from '@/server.js';
-import {
-  createUser,
-  createVerifiedDriver,
-  seedLaunchCities,
-} from '../../../tests/factories.js';
+import { createUser, createVerifiedDriver, seedLaunchCities } from '../../../tests/factories.js';
 import { NoopNotifier } from '@/lib/notifier.js';
 
 let app: Express;
@@ -183,6 +179,32 @@ describe('PATCH /v1/bookings/:id/accept', () => {
     expect(notifier.findForUser(p.id, 'booking:accepted')).toHaveLength(1);
   });
 
+  it('hides the phone until accepted and reveals it after — TZ §7.7', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: 'PH1' });
+    const trip = await createActiveTrip({ driverId: d.id, seatsTotal: 3, seatsAvailable: 3 });
+    const p = await createUser(testPrisma);
+
+    const createRes = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
+    expect(createRes.status).toBe(201);
+    // Pending booking — the passenger must NOT see the driver's real number.
+    expect(createRes.body.trip.driver.phone).toBeNull();
+
+    await request(app)
+      .patch(`/v1/bookings/${createRes.body.id}/accept`)
+      .set('Authorization', `Bearer ${d.accessToken}`)
+      .expect(200);
+
+    const after = await request(app)
+      .get(`/v1/bookings/${createRes.body.id}`)
+      .set('Authorization', `Bearer ${p.accessToken}`);
+    expect(after.status).toBe(200);
+    // Accepted — full number is now revealed to both parties.
+    expect(after.body.trip.driver.phone).toBe(d.phone);
+  });
+
   it('accepting when seats are filled expires the other pending bookings', async () => {
     const d = await createVerifiedDriver(testPrisma, { plate: 'A2' });
     const trip = await createActiveTrip({ driverId: d.id, seatsTotal: 1, seatsAvailable: 1 });
@@ -190,9 +212,18 @@ describe('PATCH /v1/bookings/:id/accept', () => {
     const p2 = await createUser(testPrisma);
     const p3 = await createUser(testPrisma);
 
-    const b1 = await request(app).post('/v1/bookings').set('Authorization', `Bearer ${p1.accessToken}`).send({ tripId: trip.id, seatsCount: 1 });
-    await request(app).post('/v1/bookings').set('Authorization', `Bearer ${p2.accessToken}`).send({ tripId: trip.id, seatsCount: 1 });
-    await request(app).post('/v1/bookings').set('Authorization', `Bearer ${p3.accessToken}`).send({ tripId: trip.id, seatsCount: 1 });
+    const b1 = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p1.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
+    await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p2.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
+    await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p3.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
 
     const acc = await request(app)
       .patch(`/v1/bookings/${b1.body.id}/accept`)
@@ -217,7 +248,10 @@ describe('PATCH /v1/bookings/:id/accept', () => {
     const d2 = await createVerifiedDriver(testPrisma, { plate: 'A4' });
     const trip = await createActiveTrip({ driverId: d1.id });
     const p = await createUser(testPrisma);
-    const b = await request(app).post('/v1/bookings').set('Authorization', `Bearer ${p.accessToken}`).send({ tripId: trip.id, seatsCount: 1 });
+    const b = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
 
     const res = await request(app)
       .patch(`/v1/bookings/${b.body.id}/accept`)
@@ -231,7 +265,10 @@ describe('PATCH /v1/bookings/:id/reject', () => {
     const d = await createVerifiedDriver(testPrisma, { plate: 'RJ1' });
     const trip = await createActiveTrip({ driverId: d.id, seatsTotal: 3, seatsAvailable: 3 });
     const p = await createUser(testPrisma);
-    const b = await request(app).post('/v1/bookings').set('Authorization', `Bearer ${p.accessToken}`).send({ tripId: trip.id, seatsCount: 2 });
+    const b = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 2 });
 
     const res = await request(app)
       .patch(`/v1/bookings/${b.body.id}/reject`)
@@ -256,8 +293,13 @@ describe('PATCH /v1/bookings/:id/cancel', () => {
       when: new Date(Date.now() + 5 * 60 * 60_000),
     });
     const p = await createUser(testPrisma);
-    const b = await request(app).post('/v1/bookings').set('Authorization', `Bearer ${p.accessToken}`).send({ tripId: trip.id, seatsCount: 2 });
-    await request(app).patch(`/v1/bookings/${b.body.id}/accept`).set('Authorization', `Bearer ${d.accessToken}`);
+    const b = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 2 });
+    await request(app)
+      .patch(`/v1/bookings/${b.body.id}/accept`)
+      .set('Authorization', `Bearer ${d.accessToken}`);
 
     const res = await request(app)
       .patch(`/v1/bookings/${b.body.id}/cancel`)
@@ -279,8 +321,13 @@ describe('PATCH /v1/bookings/:id/cancel', () => {
       when: new Date(Date.now() + 60 * 60_000),
     });
     const p = await createUser(testPrisma);
-    const b = await request(app).post('/v1/bookings').set('Authorization', `Bearer ${p.accessToken}`).send({ tripId: trip.id, seatsCount: 1 });
-    await request(app).patch(`/v1/bookings/${b.body.id}/accept`).set('Authorization', `Bearer ${d.accessToken}`);
+    const b = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
+    await request(app)
+      .patch(`/v1/bookings/${b.body.id}/accept`)
+      .set('Authorization', `Bearer ${d.accessToken}`);
 
     const res = await request(app)
       .patch(`/v1/bookings/${b.body.id}/cancel`)
@@ -305,8 +352,13 @@ describe('PATCH /v1/bookings/:id/no-show', () => {
       where: { id: p.id },
       data: { rating: 4.5, ratingCount: 10 },
     });
-    const b = await request(app).post('/v1/bookings').set('Authorization', `Bearer ${p.accessToken}`).send({ tripId: trip.id, seatsCount: 1 });
-    await request(app).patch(`/v1/bookings/${b.body.id}/accept`).set('Authorization', `Bearer ${d.accessToken}`);
+    const b = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
+    await request(app)
+      .patch(`/v1/bookings/${b.body.id}/accept`)
+      .set('Authorization', `Bearer ${d.accessToken}`);
 
     // Trip hasn't departed yet → 409
     const tooEarly = await request(app)
@@ -331,13 +383,19 @@ describe('PATCH /v1/bookings/:id/no-show', () => {
 });
 
 describe('GET /v1/bookings/my and /incoming', () => {
-  it('returns only the caller\'s bookings (passenger)', async () => {
+  it("returns only the caller's bookings (passenger)", async () => {
     const d = await createVerifiedDriver(testPrisma, { plate: 'LM1' });
     const trip = await createActiveTrip({ driverId: d.id });
     const p1 = await createUser(testPrisma);
     const p2 = await createUser(testPrisma);
-    await request(app).post('/v1/bookings').set('Authorization', `Bearer ${p1.accessToken}`).send({ tripId: trip.id, seatsCount: 1 });
-    await request(app).post('/v1/bookings').set('Authorization', `Bearer ${p2.accessToken}`).send({ tripId: trip.id, seatsCount: 1 });
+    await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p1.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
+    await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p2.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
 
     const res = await request(app)
       .get('/v1/bookings/my')
@@ -350,7 +408,10 @@ describe('GET /v1/bookings/my and /incoming', () => {
     const d = await createVerifiedDriver(testPrisma, { plate: 'LM2' });
     const trip = await createActiveTrip({ driverId: d.id });
     const p = await createUser(testPrisma);
-    const b = await request(app).post('/v1/bookings').set('Authorization', `Bearer ${p.accessToken}`).send({ tripId: trip.id, seatsCount: 1 });
+    const b = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
 
     const res = await request(app)
       .get('/v1/bookings/incoming')
@@ -359,7 +420,9 @@ describe('GET /v1/bookings/my and /incoming', () => {
     expect(res.body.data[0].id).toBe(b.body.id);
 
     // After accept, no longer in incoming
-    await request(app).patch(`/v1/bookings/${b.body.id}/accept`).set('Authorization', `Bearer ${d.accessToken}`);
+    await request(app)
+      .patch(`/v1/bookings/${b.body.id}/accept`)
+      .set('Authorization', `Bearer ${d.accessToken}`);
     const after = await request(app)
       .get('/v1/bookings/incoming')
       .set('Authorization', `Bearer ${d.accessToken}`);

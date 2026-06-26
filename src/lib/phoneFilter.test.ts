@@ -3,17 +3,17 @@ import { filterPhoneNumbers } from './phoneFilter.js';
 
 describe('filterPhoneNumbers', () => {
   it('redacts +996 numbers with various separators', () => {
-    expect(filterPhoneNumbers('call me +996 700 123 456').filtered).toContain('[номер скрыт]');
-    expect(filterPhoneNumbers('+996700123456').filtered).toContain('[номер скрыт]');
-    expect(filterPhoneNumbers('+996-555-12-34-56').filtered).toContain('[номер скрыт]');
+    expect(filterPhoneNumbers('call me +996 700 123 456').filtered).toContain('[скрыто]');
+    expect(filterPhoneNumbers('+996700123456').filtered).toContain('[скрыто]');
+    expect(filterPhoneNumbers('+996-555-12-34-56').filtered).toContain('[скрыто]');
   });
 
   it('redacts local 0-prefixed 10-digit numbers', () => {
-    expect(filterPhoneNumbers('0700 123 456').filtered).toContain('[номер скрыт]');
+    expect(filterPhoneNumbers('0700 123 456').filtered).toContain('[скрыто]');
   });
 
   it('redacts bare runs of 9+ digits', () => {
-    expect(filterPhoneNumbers('пиши на 700123456').filtered).toContain('[номер скрыт]');
+    expect(filterPhoneNumbers('пиши на 700123456').filtered).toContain('[скрыто]');
   });
 
   it('leaves normal text alone', () => {

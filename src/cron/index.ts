@@ -10,6 +10,8 @@ import { escalateComplaintsJob } from './jobs/escalateComplaints.js';
 import { recalcCancellationsJob } from './jobs/recalcCancellations.js';
 import { hardDeleteUsersJob } from './jobs/hardDeleteUsers.js';
 import { analyticsRecalcJob } from './jobs/analyticsRecalc.js';
+import { dbBackupJob } from './jobs/dbBackup.js';
+import { filesBackupJob } from './jobs/filesBackup.js';
 
 export function buildScheduler(prisma: PrismaClient): CronScheduler {
   const scheduler = new CronScheduler(prisma);
@@ -23,6 +25,8 @@ export function buildScheduler(prisma: PrismaClient): CronScheduler {
   scheduler.register(recalcCancellationsJob);
   scheduler.register(hardDeleteUsersJob);
   scheduler.register(analyticsRecalcJob);
+  scheduler.register(dbBackupJob);
+  scheduler.register(filesBackupJob);
   return scheduler;
 }
 

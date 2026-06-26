@@ -4,6 +4,7 @@ import type { PrismaClient } from '@prisma/client';
 import { verifyAccessToken } from '@/lib/jwt.js';
 import { logger } from '@/lib/logger.js';
 import { createChatService } from '@/modules/chat/chat.service.js';
+import { createBookingsService } from '@/modules/bookings/bookings.service.js';
 import type { Notifier } from '@/lib/notifier.js';
 
 /**
@@ -14,7 +15,7 @@ import type { Notifier } from '@/lib/notifier.js';
  * Protocol (TZ §13.2 + §20):
  *   Auth:            JWT in handshake.auth.token
  *   Rooms:           `user:<uuid>` per connection, `chat:<booking_id>` on chat:join
- *   Client → Server: chat:join, chat:send, chat:read, chat:typing
+ *   Client → Server: chat:join, chat:send, chat:read, chat:typing, booking:view
  *   Server → Client: chat:joined, chat:message, chat:message_sent, chat:read,
  *                    chat:typing, chat:error, booking:*, trip:cancelled,
  *                    notification:new
@@ -50,12 +51,9 @@ export function createIoServer(httpServer: HttpServer): IoServer {
  * Step 2 — wire handshake auth, chat namespace, and per-socket user rooms.
  * Call this once the notifier is constructed.
  */
-export function attachChatNamespace(
-  io: IoServer,
-  prisma: PrismaClient,
-  notifier: Notifier,
-): void {
+export function attachChatNamespace(io: IoServer, prisma: PrismaClient, notifier: Notifier): void {
   const chat = createChatService(prisma, notifier);
+  const bookings = createBookingsService(prisma, notifier);
 
   // ─── Handshake auth ───────────────────────────────────────────────
   io.use((socket, next) => {
@@ -147,7 +145,10 @@ export function attachChatNamespace(
         } catch (err) {
           logger.warn({ err, userId }, 'chat:send failed');
           socket.emit('chat:error', {
-            code: err instanceof Error && 'code' in err ? (err as { code: string }).code : 'SEND_FAILED',
+            code:
+              err instanceof Error && 'code' in err
+                ? (err as { code: string }).code
+                : 'SEND_FAILED',
           });
         }
       },
@@ -168,6 +169,18 @@ export function attachChatNamespace(
     socket.on('chat:typing', ({ booking_id }: { booking_id: string }) => {
       // Broadcast to the room, except the sender.
       socket.to(`chat:${booking_id}`).emit('chat:typing', { user_id: userId });
+    });
+
+    // ─── booking:view ──────────────────────────────────────────────────
+    // TZ §13.3/§13.4 "Новое: водитель открыл карточку запроса". Stamp
+    // viewed_at and emit booking:viewed to the passenger (markViewed checks
+    // that the caller is the trip's driver). Mirrors REST GET /bookings/:id.
+    socket.on('booking:view', async ({ booking_id }: { booking_id: string }) => {
+      try {
+        await bookings.markViewed(booking_id, userId);
+      } catch (err) {
+        logger.debug({ err, userId }, 'booking:view ignored');
+      }
     });
 
     socket.on('disconnect', (reason) => {

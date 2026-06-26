@@ -48,6 +48,12 @@ const EnvSchema = z.object({
   FILES_DIR: z.string().default('./var/files'),
   MAX_UPLOAD_MB: z.coerce.number().int().positive().default(5),
 
+  // Backups (TZ §4.5 + §21). When BACKUP_DIR is empty the db_backup /
+  // files_backup cron jobs no-op — keeps dev/CI from shelling out to
+  // pg_dump/rsync. Set it on staging/prod to enable daily dumps.
+  BACKUP_DIR: z.string().default(''),
+  BACKUP_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+
   RATE_LIMIT_DISABLED: z
     .enum(['true', 'false'])
     .default('false')

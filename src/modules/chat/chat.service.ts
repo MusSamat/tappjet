@@ -11,7 +11,7 @@ const POST_COMPLETION_WRITE_WINDOW_HOURS = 48;
 
 // ─── Pre-booking phase limits (TZ §13) ─────────────────────────────
 const PRE_BOOKING_MSG_LIMIT = 10;
-const PRE_BOOKING_WARN_AT = 8;   // emit chat:limit_warning when this many sent
+const PRE_BOOKING_WARN_AT = 8; // emit chat:limit_warning when this many sent
 
 export interface ChatMessage {
   id: string;
@@ -85,12 +85,21 @@ export function createChatService(prisma: PrismaClient, notifier: Notifier): Cha
   ): void {
     assertCanRead(bk, viewerId);
 
-    // Pre-booking inquiry — both sides can message before driver accepts.
-    if (bk.status === 'pending' || bk.status === 'viewed') return;
+    // Pre-booking inquiry (TZ §13.1 "Кто может писать: Пассажир → водителю").
+    // Only the passenger may write before the driver accepts; the driver
+    // responds by accepting/rejecting the request, not by chatting. This keeps
+    // the anti-bypass intent intact (no contact exchange before commitment).
+    if (bk.status === 'pending' || bk.status === 'viewed') {
+      if (viewerId !== bk.passengerId) {
+        throw Errors.forbidden({ reason: 'driver_cannot_write_pre_booking' });
+      }
+      return;
+    }
 
     // 'direct' trips are created from passenger-request responses — they are
     // accepted bookings on synthetic trips that bypass the active-trip index.
-    if (bk.status === 'accepted' && (bk.trip.status === 'active' || bk.trip.status === 'direct')) return;
+    if (bk.status === 'accepted' && (bk.trip.status === 'active' || bk.trip.status === 'direct'))
+      return;
 
     if (bk.status === 'completed') {
       const age = Date.now() - bk.trip.updatedAt.getTime();
@@ -136,7 +145,10 @@ export function createChatService(prisma: PrismaClient, notifier: Notifier): Cha
         where: { bookingId, chatPhase: 'pre_booking' },
       });
       if (count >= PRE_BOOKING_MSG_LIMIT) {
-        throw Errors.forbidden({ reason: 'pre_booking_limit_reached', limit: PRE_BOOKING_MSG_LIMIT });
+        throw Errors.forbidden({
+          reason: 'pre_booking_limit_reached',
+          limit: PRE_BOOKING_MSG_LIMIT,
+        });
       }
     }
 
@@ -234,10 +246,7 @@ export function createChatService(prisma: PrismaClient, notifier: Notifier): Cha
         senderId: { not: userId },
         isRead: false,
         booking: {
-          OR: [
-            { passengerId: userId },
-            { trip: { driverId: userId } },
-          ],
+          OR: [{ passengerId: userId }, { trip: { driverId: userId } }],
         },
       },
       _count: { id: true },
@@ -268,10 +277,7 @@ export function createChatService(prisma: PrismaClient, notifier: Notifier): Cha
     const bookings = await prisma.booking.findMany({
       where: {
         status: { in: ['accepted', 'completed'] },
-        OR: [
-          { passengerId: userId },
-          { trip: { driverId: userId } },
-        ],
+        OR: [{ passengerId: userId }, { trip: { driverId: userId } }],
       },
       include: {
         trip: {
@@ -303,28 +309,34 @@ export function createChatService(prisma: PrismaClient, notifier: Notifier): Cha
     });
     const unreadMap = Object.fromEntries(unreadRows.map((r) => [r.bookingId, r._count.id]));
 
-    return bookings
-      .map((b) => {
-        const isDriver = b.trip.driverId === userId;
-        const lastMessageAt = b.messages[0]?.createdAt?.toISOString() ?? null;
-        return {
-          bookingId: b.id,
-          bookingStatus: b.status,
-          role: isDriver ? ('driver' as const) : ('passenger' as const),
-          otherName: isDriver ? (b.passenger.name ?? 'Пассажир') : (b.trip.driver?.name ?? 'Водитель'),
-          otherAvatarUrl: isDriver ? toFileUrl(b.passenger.avatarUrl) : toFileUrl(b.trip.driver?.avatarUrl),
-          route: `${b.trip.originCity} → ${b.trip.destinationCity}`,
-          lastMessageAt,
-          unreadCount: unreadMap[b.id] ?? 0,
-        };
-      })
-      // Most recently active chats first; bookings with no messages go to end
-      .sort((a, b) => {
-        if (!a.lastMessageAt && !b.lastMessageAt) return 0;
-        if (!a.lastMessageAt) return 1;
-        if (!b.lastMessageAt) return -1;
-        return new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime();
-      });
+    return (
+      bookings
+        .map((b) => {
+          const isDriver = b.trip.driverId === userId;
+          const lastMessageAt = b.messages[0]?.createdAt?.toISOString() ?? null;
+          return {
+            bookingId: b.id,
+            bookingStatus: b.status,
+            role: isDriver ? ('driver' as const) : ('passenger' as const),
+            otherName: isDriver
+              ? (b.passenger.name ?? 'Пассажир')
+              : (b.trip.driver?.name ?? 'Водитель'),
+            otherAvatarUrl: isDriver
+              ? toFileUrl(b.passenger.avatarUrl)
+              : toFileUrl(b.trip.driver?.avatarUrl),
+            route: `${b.trip.originCity} → ${b.trip.destinationCity}`,
+            lastMessageAt,
+            unreadCount: unreadMap[b.id] ?? 0,
+          };
+        })
+        // Most recently active chats first; bookings with no messages go to end
+        .sort((a, b) => {
+          if (!a.lastMessageAt && !b.lastMessageAt) return 0;
+          if (!a.lastMessageAt) return 1;
+          if (!b.lastMessageAt) return -1;
+          return new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime();
+        })
+    );
   }
 
   return { history, send, markRead, markAllRead, participants, unreadCounts, summaries };

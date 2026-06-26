@@ -1,13 +1,9 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
-import { AppError, Errors } from '@/lib/errors.js';
+import { AppError, Errors, publicPhone } from '@/lib/errors.js';
 import { toFileUrl } from '@/lib/uploads.js';
 import { cursorArgs, sliceAndNext } from '@/lib/pagination.js';
 import { logger } from '@/lib/logger.js';
-import type {
-  Notifier,
-  PublicBooking,
-  PublicTrip,
-} from '@/lib/notifier.js';
+import type { Notifier, PublicBooking, PublicTrip } from '@/lib/notifier.js';
 import type {
   BookingCancelInput,
   BookingCreateInput,
@@ -21,15 +17,43 @@ const BOOKING_PENDING_TTL_MIN = 60;
 // TZ §16.1 — cancellation window for passengers: ≥2h before departure = clean
 // cancel; less than 2h = `cancelled_late` (no penalty in MVP, pointer for Stage 3).
 const LATE_CANCEL_CUTOFF_HOURS = 2;
+// TZ §7.7 "Видимость номера телефона" — the real phone is exposed only once the
+// booking is accepted, and for 48h after the trip completes. In every other
+// state (pending/viewed/rejected/expired/cancelled) both sides see name +
+// rating only. This is the platform's anti-bypass guarantee.
+const POST_COMPLETION_PHONE_WINDOW_HOURS = 48;
+
+/** TZ §7.7 — whether the counterparty's phone may be revealed for this booking. */
+function isPhoneVisible(bookingStatus: string, tripUpdatedAt: Date): boolean {
+  if (bookingStatus === 'accepted') return true;
+  if (bookingStatus === 'completed') {
+    return Date.now() - tripUpdatedAt.getTime() < POST_COMPLETION_PHONE_WINDOW_HOURS * 60 * 60_000;
+  }
+  return false;
+}
 
 // ─── Public shapes ────────────────────────────────────────────────────
 export interface BookingDTO extends PublicBooking {
   trip: PublicTrip & {
-    driver: { id: string; name: string; avatarUrl: string | null; phone?: string | null; rating: number | null; ratingCount: number };
+    driver: {
+      id: string;
+      name: string;
+      avatarUrl: string | null;
+      phone?: string | null;
+      rating: number | null;
+      ratingCount: number;
+    };
     seatsAvailable: number;
     pricePerSeat: number;
   };
-  passenger: { id: string; name: string; avatarUrl: string | null; phone?: string | null; rating: number | null; ratingCount: number };
+  passenger: {
+    id: string;
+    name: string;
+    avatarUrl: string | null;
+    phone?: string | null;
+    rating: number | null;
+    ratingCount: number;
+  };
 }
 
 export interface BookingsService {
@@ -40,11 +64,7 @@ export interface BookingsService {
   ): Promise<BookingDTO>;
   accept(bookingId: string, driverUserId: string): Promise<BookingDTO>;
   reject(bookingId: string, driverUserId: string, reason?: string): Promise<BookingDTO>;
-  cancel(
-    bookingId: string,
-    userId: string,
-    input: BookingCancelInput,
-  ): Promise<BookingDTO>;
+  cancel(bookingId: string, userId: string, input: BookingCancelInput): Promise<BookingDTO>;
   noShow(bookingId: string, driverUserId: string): Promise<BookingDTO>;
   listMy(
     passengerId: string,
@@ -238,7 +258,11 @@ export function createBookingsService(prisma: PrismaClient, notifier: Notifier):
           status: { in: ['pending', 'viewed'] },
           id: { not: bk.id },
         },
-        data: { status: 'cancelled_by_passenger', cancelledBy: 'passenger', cancelledAt: new Date() },
+        data: {
+          status: 'cancelled_by_passenger',
+          cancelledBy: 'passenger',
+          cancelledAt: new Date(),
+        },
       });
 
       // TZ §12.2 — if seats hit zero, all other pending bookings become expired.
@@ -275,7 +299,16 @@ export function createBookingsService(prisma: PrismaClient, notifier: Notifier):
           status: 'expired',
           id: { not: full.id },
         },
-        select: { id: true, passengerId: true, tripId: true, seatsCount: true, status: true, createdAt: true, expiresAt: true, comment: true },
+        select: {
+          id: true,
+          passengerId: true,
+          tripId: true,
+          seatsCount: true,
+          status: true,
+          createdAt: true,
+          expiresAt: true,
+          comment: true,
+        },
       });
       for (const e of expiredPeers) {
         await notifier.bookingExpired(e.passengerId, {
@@ -330,7 +363,9 @@ export function createBookingsService(prisma: PrismaClient, notifier: Notifier):
     const result = await prisma.$transaction(async (tx) => {
       const bk = await tx.booking.findUnique({
         where: { id: bookingId },
-        include: { trip: { select: { id: true, driverId: true, departureAt: true, status: true } } },
+        include: {
+          trip: { select: { id: true, driverId: true, departureAt: true, status: true } },
+        },
       });
       if (!bk) throw Errors.notFound('Booking');
 
@@ -530,13 +565,35 @@ async function loadDTO(prisma: PrismaClient, id: string): Promise<BookingDTO> {
           departureAt: true,
           seatsAvailable: true,
           pricePerSeat: true,
-          driver: { select: { id: true, name: true, avatarUrl: true, phone: true, rating: true, ratingCount: true } },
+          updatedAt: true,
+          driver: {
+            select: {
+              id: true,
+              name: true,
+              avatarUrl: true,
+              phone: true,
+              rating: true,
+              ratingCount: true,
+            },
+          },
         },
       },
-      passenger: { select: { id: true, name: true, avatarUrl: true, phone: true, rating: true, ratingCount: true } },
+      passenger: {
+        select: {
+          id: true,
+          name: true,
+          avatarUrl: true,
+          phone: true,
+          rating: true,
+          ratingCount: true,
+        },
+      },
     },
   });
   if (!row) throw Errors.notFound('Booking');
+
+  // TZ §7.7 — gate phone exposure by booking status. Hidden until accepted.
+  const showPhone = isPhoneVisible(row.status, row.trip.updatedAt);
 
   return {
     id: row.id,
@@ -559,7 +616,7 @@ async function loadDTO(prisma: PrismaClient, id: string): Promise<BookingDTO> {
         id: row.trip.driver.id,
         name: row.trip.driver.name,
         avatarUrl: toFileUrl(row.trip.driver.avatarUrl),
-        phone: row.trip.driver.phone ?? null,
+        phone: showPhone ? publicPhone(row.trip.driver.phone) || null : null,
         rating: row.trip.driver.ratingCount >= 3 ? Number(row.trip.driver.rating) : null,
         ratingCount: row.trip.driver.ratingCount,
       },
@@ -568,7 +625,7 @@ async function loadDTO(prisma: PrismaClient, id: string): Promise<BookingDTO> {
       id: row.passenger.id,
       name: row.passenger.name,
       avatarUrl: toFileUrl(row.passenger.avatarUrl),
-      phone: row.passenger.phone ?? null,
+      phone: showPhone ? publicPhone(row.passenger.phone) || null : null,
       rating: row.passenger.ratingCount >= 3 ? Number(row.passenger.rating) : null,
       ratingCount: row.passenger.ratingCount,
     },

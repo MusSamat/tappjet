@@ -14,6 +14,7 @@ import {
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
 import { requireAuth, requireRole } from '@/middleware/auth.js';
+import { tripCreateLimit } from '@/middleware/rateLimit.js';
 import { Errors } from '@/lib/errors.js';
 
 export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Router {
@@ -36,6 +37,7 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
     '/',
     requireAuth,
     requireRole('driver'),
+    tripCreateLimit,
     validate({ body: TripCreateBody, headers: IdempotencyHeader }),
     asyncHandler(async (req, res) => {
       const key = req.header('idempotency-key');
@@ -105,8 +107,7 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
     requireRole('driver'),
     validate({ params: TripIdParam }),
     asyncHandler(async (req, res) => {
-      const reason =
-        typeof req.body?.reason === 'string' ? (req.body.reason as string) : undefined;
+      const reason = typeof req.body?.reason === 'string' ? (req.body.reason as string) : undefined;
       const result = await service.cancel(req.params.id!, req.user!.id, reason);
       res.json(result);
     }),

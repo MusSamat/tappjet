@@ -28,6 +28,7 @@ import {
 import { verifyAccessOrProvisional } from '@/lib/jwt.js';
 import type { Notifier } from '@/lib/notifier.js';
 import { Errors } from '@/lib/errors.js';
+import { REFRESH_COOKIE, clearRefreshCookie, readCookie, webRefreshCookie } from '@/lib/cookies.js';
 
 export function createAuthRouter(
   prisma: PrismaClient,
@@ -36,6 +37,10 @@ export function createAuthRouter(
 ): Router {
   const router = Router();
   const service = createAuthService(prisma, notifier, bot);
+
+  // For channel='web', deliver the refresh token via an HttpOnly cookie and
+  // strip it from the JSON body (TZ §5/§26.1). Mobile is untouched.
+  router.use(webRefreshCookie());
 
   // ─── OAuth / Telegram logins ──────────────────────────────────────
   router.post(
@@ -145,9 +150,11 @@ export function createAuthRouter(
     '/refresh',
     validate({ body: RefreshBody }),
     asyncHandler(async (req, res) => {
-      const { refreshToken } = req.body as { refreshToken: string };
+      const body = req.body as { refreshToken?: string; channel?: string };
+      const token = body.refreshToken ?? readCookie(req, REFRESH_COOKIE.user);
+      if (!token) throw Errors.unauthorized({ reason: 'missing_refresh_token' });
       const pair = await service.refresh(
-        refreshToken,
+        token,
         req.header('user-agent')?.slice(0, 300),
         req.ip ?? null,
       );
@@ -159,8 +166,10 @@ export function createAuthRouter(
     '/logout',
     validate({ body: LogoutBody }),
     asyncHandler(async (req, res) => {
-      const { refreshToken } = req.body as { refreshToken: string };
-      await service.logout(refreshToken);
+      const body = req.body as { refreshToken?: string; channel?: string };
+      const token = body.refreshToken ?? readCookie(req, REFRESH_COOKIE.user);
+      if (token) await service.logout(token);
+      if (body.channel === 'web') clearRefreshCookie(res, REFRESH_COOKIE.user);
       res.status(204).send();
     }),
   );
@@ -278,8 +287,10 @@ export function createAuthRouter(
     '/admin/refresh',
     validate({ body: AdminRefreshBody }),
     asyncHandler(async (req, res) => {
-      const { refreshToken } = req.body as { refreshToken: string };
-      res.status(200).json(await service.adminRefresh(refreshToken));
+      const body = req.body as { refreshToken?: string; channel?: string };
+      const token = body.refreshToken ?? readCookie(req, REFRESH_COOKIE.admin);
+      if (!token) throw Errors.unauthorized({ reason: 'missing_refresh_token' });
+      res.status(200).json(await service.adminRefresh(token));
     }),
   );
 

@@ -92,3 +92,24 @@ export const complaintSubmitLimit = build({
   limit: 3,
   keyGenerator: (req: Request) => req.user?.id ?? ipKey(req),
 });
+
+// ─── User-based write limits ──────────────────────────────────────────
+// Keyed on the authenticated user id, so they MUST be mounted after
+// requireAuth in the middleware chain (req.user is populated by then).
+const userKey = (req: Request): string => req.user?.id ?? ipKey(req);
+
+/** TZ §7.3 "POST /trips · 5 поездок в час на driver user_id" (anti-flood). */
+export const tripCreateLimit = build({
+  name: 'trip_create',
+  windowMs: 60 * 60_000,
+  limit: 5,
+  keyGenerator: userKey,
+});
+
+/** TZ §7.3 "POST /bookings · 20 бронирований в час на passenger user_id" (anti-spam). */
+export const bookingCreateLimit = build({
+  name: 'booking_create',
+  windowMs: 60 * 60_000,
+  limit: 20,
+  keyGenerator: userKey,
+});

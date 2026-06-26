@@ -3,7 +3,7 @@ import request from 'supertest';
 import type { Express } from 'express';
 import { testPrisma } from '../../../tests/setup.js';
 import { createApp } from '@/server.js';
-import { createUser, jpegBuffer } from '../../../tests/factories.js';
+import { createUser, jpegBuffer, smallJpegBuffer } from '../../../tests/factories.js';
 
 let app: Express;
 beforeEach(() => {
@@ -45,6 +45,27 @@ describe('POST /v1/drivers/verification', () => {
     expect(dp!.verificationStatus).toBe('pending');
     expect(dp!.licensePhotoPath).toMatch(/^driver_license\//);
     expect(dp!.selfiePath).toMatch(/^selfie\//);
+  });
+
+  it('rejects a document photo below 800×600 — TZ §9.1', async () => {
+    const u = await createUser(testPrisma);
+    const res = await request(app)
+      .post('/v1/drivers/verification')
+      .set('Authorization', `Bearer ${u.accessToken}`)
+      .field('carMake', 'Toyota')
+      .field('carModel', 'Camry')
+      .field('carYear', '2015')
+      .field('carColor', 'Белый')
+      .field('carPlate', 'SMALL123')
+      .field('seatsCount', '4')
+      .attach('license', smallJpegBuffer(), { filename: 'l.jpg', contentType: 'image/jpeg' })
+      .attach('car_passport', jpegBuffer(), { filename: 'p.jpg', contentType: 'image/jpeg' })
+      .attach('car_photo', jpegBuffer(), { filename: 'c.jpg', contentType: 'image/jpeg' })
+      .attach('selfie', jpegBuffer(), { filename: 's.jpg', contentType: 'image/jpeg' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.details.reason).toBe('image_too_small');
+    // No profile row should have been created.
+    expect(await testPrisma.driverProfile.findUnique({ where: { userId: u.id } })).toBeNull();
   });
 
   it('rejects duplicate plate from another user', async () => {

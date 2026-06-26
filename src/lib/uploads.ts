@@ -45,6 +45,84 @@ export function detectImageMime(buffer: Buffer): 'image/jpeg' | 'image/png' | nu
   return null;
 }
 
+/**
+ * Read intrinsic pixel dimensions straight from the image header — no decode,
+ * no third-party dependency (TZ stack is fixed; no new npm packages). Supports
+ * the only two formats we accept: PNG (IHDR) and JPEG (Start-Of-Frame marker).
+ * Returns null if the header can't be parsed.
+ */
+export function readImageDimensions(buffer: Buffer): { width: number; height: number } | null {
+  // PNG: 8-byte signature, then IHDR chunk → width@16, height@20 (big-endian).
+  if (
+    buffer.length >= 24 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+  }
+
+  // JPEG: scan segments for a Start-Of-Frame marker (SOF0–SOF15, excluding the
+  // non-frame C4/C8/CC). SOF layout: FFCx, len(2), precision(1), height(2), width(2).
+  if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < buffer.length) {
+      if (buffer[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      const marker = buffer[offset + 1]!;
+      // Standalone markers carry no length payload — skip 2 bytes.
+      if (
+        marker === 0xd8 ||
+        marker === 0xd9 ||
+        (marker >= 0xd0 && marker <= 0xd7) ||
+        marker === 0x01
+      ) {
+        offset += 2;
+        continue;
+      }
+      const segLen = buffer.readUInt16BE(offset + 2);
+      const isSOF =
+        marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+      if (isSOF) {
+        return {
+          height: buffer.readUInt16BE(offset + 5),
+          width: buffer.readUInt16BE(offset + 7),
+        };
+      }
+      offset += 2 + segLen;
+    }
+  }
+  return null;
+}
+
+/**
+ * Enforce TZ §9.1/§9.3 minimum dimensions on document photos (800×600). An
+ * unreadable header is rejected rather than silently passed — a "JPEG" with no
+ * Start-Of-Frame isn't a usable document scan.
+ */
+export function assertMinDimensions(
+  file: Express.Multer.File,
+  minWidth: number,
+  minHeight: number,
+): void {
+  const dims = readImageDimensions(file.buffer);
+  if (!dims) {
+    throw Errors.validation({ reason: 'unreadable_image_dimensions' });
+  }
+  if (dims.width < minWidth || dims.height < minHeight) {
+    throw Errors.validation({
+      reason: 'image_too_small',
+      width: dims.width,
+      height: dims.height,
+      min_width: minWidth,
+      min_height: minHeight,
+    });
+  }
+}
+
 const fileFilter = (_req: Request, file: Express.Multer.File, cb: FileFilterCallback): void => {
   if (!ALLOWED_MIME.has(file.mimetype)) {
     cb(Errors.validation({ reason: 'unsupported_mime', mimetype: file.mimetype }));
@@ -62,7 +140,7 @@ export const uploadMemory = multer({
 });
 
 export interface StoredFile {
-  path: string;    // DB-friendly relative path (what we write into *_path columns)
+  path: string; // DB-friendly relative path (what we write into *_path columns)
   absPath: string; // on-disk absolute path
   mime: 'image/jpeg' | 'image/png';
   size: number;

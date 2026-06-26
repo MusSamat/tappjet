@@ -6,6 +6,7 @@ import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
 import { requireAuth } from '@/middleware/auth.js';
 import { uploadMemory } from '@/lib/uploads.js';
+import { webRefreshCookie } from '@/lib/cookies.js';
 import { Errors } from '@/lib/errors.js';
 import { createAuthService } from '@/modules/auth/auth.service.js';
 import {
@@ -22,6 +23,9 @@ export function createUsersRouter(prisma: PrismaClient, notifier: Notifier): Rou
   const router = Router();
   const service = createUsersService(prisma);
   const auth = createAuthService(prisma, notifier);
+
+  // Phone-change re-issues tokens — route the web refresh token into a cookie.
+  router.use(webRefreshCookie());
 
   router.get(
     '/me',
@@ -61,7 +65,10 @@ export function createUsersRouter(prisma: PrismaClient, notifier: Notifier): Rou
     asyncHandler(async (req, res) => {
       const dump = await service.exportData(req.user!.id);
       res
-        .setHeader('Content-Disposition', `attachment; filename="tappjet-export-${req.user!.id}.json"`)
+        .setHeader(
+          'Content-Disposition',
+          `attachment; filename="tappjet-export-${req.user!.id}.json"`,
+        )
         .setHeader('Content-Type', 'application/json; charset=utf-8')
         .send(JSON.stringify(dump, null, 2));
     }),

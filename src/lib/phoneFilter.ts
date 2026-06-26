@@ -1,5 +1,5 @@
-// TZ §13.3 "Запрещённый контент · Фильтр на номера телефонов (regex) —
-// заменяем на [номер скрыт]". Strips Kyrgyz-style international (+996…) and
+// TZ §13.1 "Фильтр контента · Телефоны, адреса соцсетей → [скрыто]". Strips
+// Kyrgyz-style international (+996…) and
 // local bare-digit numbers from chat messages so drivers and passengers can't
 // bypass the platform before mutual consent.
 //
@@ -18,7 +18,7 @@ const PATTERNS: RegExp[] = [
   /(?:^|\D)(?:\d[\s\-]*){9,12}(?=$|\D)/g,
 ];
 
-const REDACTED = '[номер скрыт]';
+const REDACTED = '[скрыто]';
 
 export function filterPhoneNumbers(text: string): { filtered: string; redacted: boolean } {
   let filtered = text;

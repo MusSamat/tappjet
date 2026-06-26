@@ -1,6 +1,11 @@
 import bcrypt from 'bcryptjs';
 import type { PrismaClient } from '@prisma/client';
-import { signAccessToken, signAdminAccessToken, signRefreshToken, refreshTtlSeconds } from '@/lib/jwt.js';
+import {
+  signAccessToken,
+  signAdminAccessToken,
+  signRefreshToken,
+  refreshTtlSeconds,
+} from '@/lib/jwt.js';
 import { generateUuid, sha256Hex } from '@/lib/random.js';
 import { NoopNotifier, type Notifier } from '@/lib/notifier.js';
 
@@ -82,10 +87,26 @@ export async function createAdmin(
 }
 
 /**
- * Minimal valid JPEG buffer — carries the magic bytes that pass detection.
+ * Minimal valid JPEG buffer — magic bytes plus a real SOF0 frame so the
+ * dimension reader (TZ §9.1 min 800×600 check) can parse width/height.
+ * Defaults to 1024×768 (passes the doc-photo minimum).
  */
-export function jpegBuffer(): Buffer {
-  return Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200)]);
+export function jpegBuffer(width = 1024, height = 768): Buffer {
+  const sof = Buffer.alloc(11);
+  sof[0] = 0xff;
+  sof[1] = 0xc0; // SOF0 marker
+  sof.writeUInt16BE(0x0011, 2); // segment length (17)
+  sof[4] = 0x08; // sample precision
+  sof.writeUInt16BE(height, 5);
+  sof.writeUInt16BE(width, 7);
+  sof[9] = 0x03; // component count (filler — enough for the header parser)
+  // Bytes are FF D8 FF C0 … so the first three still match JPEG magic.
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), sof, Buffer.alloc(200)]);
+}
+
+/** Below the 800×600 document minimum — for negative verification tests. */
+export function smallJpegBuffer(): Buffer {
+  return jpegBuffer(320, 240);
 }
 
 /**
@@ -152,9 +173,9 @@ export async function createTrip(
       originAddress: 'Бишкек, Западный автовокзал',
       // Randomise day offset (1–365) to avoid idx_trips_one_active_per_day unique
       // constraint when a test creates multiple trips for the same driver.
-      departureAt: overrides.departureAt ?? new Date(
-        Date.now() + (1 + Math.floor(Math.random() * 365)) * 24 * 60 * 60_000,
-      ),
+      departureAt:
+        overrides.departureAt ??
+        new Date(Date.now() + (1 + Math.floor(Math.random() * 365)) * 24 * 60 * 60_000),
       estimatedDurationMin: 360,
       pricePerSeat: overrides.pricePerSeat ?? 1000,
       seatsTotal: overrides.seatsTotal ?? 3,
@@ -214,12 +235,72 @@ export function makeNotifier(overrides: Partial<Notifier> = {}): Notifier {
  */
 export async function seedLaunchCities(prisma: PrismaClient): Promise<void> {
   const cities = [
-    { id: 1, nameRu: 'Бишкек', nameKg: 'Бишкек', nameEn: 'Bishkek', type: 'city', regionId: 7, regionNameRu: 'Бишкек', regionNameKg: 'Бишкек', prompt: [] },
-    { id: 4, nameRu: 'Ош', nameKg: 'Ош', nameEn: 'Osh', type: 'city', regionId: 8, regionNameRu: 'Ош', regionNameKg: 'Ош', prompt: [] },
-    { id: 209, nameRu: 'Каракол', nameKg: 'Каракол', nameEn: 'Karakol', type: 'city', regionId: 2, regionNameRu: 'Иссык-Кульская область', regionNameKg: 'Ысык-Көл облусу', prompt: [] },
-    { id: 3, nameRu: 'Нарын', nameKg: 'Нарын', nameEn: 'Naryn', type: 'city', regionId: 3, regionNameRu: 'Нарынская область', regionNameKg: 'Нарын облусу', prompt: [] },
-    { id: 8, nameRu: 'Баткен', nameKg: 'Баткен', nameEn: 'Batken', type: 'city', regionId: 5, regionNameRu: 'Баткенская область', regionNameKg: 'Баткен облусу', prompt: [] },
-    { id: 501, nameRu: 'Кадамжай', nameKg: 'Кадамжай', nameEn: 'Kadamjai', type: 'city', regionId: 5, regionNameRu: 'Баткенская область', regionNameKg: 'Баткен облусу', prompt: [] },
+    {
+      id: 1,
+      nameRu: 'Бишкек',
+      nameKg: 'Бишкек',
+      nameEn: 'Bishkek',
+      type: 'city',
+      regionId: 7,
+      regionNameRu: 'Бишкек',
+      regionNameKg: 'Бишкек',
+      prompt: [],
+    },
+    {
+      id: 4,
+      nameRu: 'Ош',
+      nameKg: 'Ош',
+      nameEn: 'Osh',
+      type: 'city',
+      regionId: 8,
+      regionNameRu: 'Ош',
+      regionNameKg: 'Ош',
+      prompt: [],
+    },
+    {
+      id: 209,
+      nameRu: 'Каракол',
+      nameKg: 'Каракол',
+      nameEn: 'Karakol',
+      type: 'city',
+      regionId: 2,
+      regionNameRu: 'Иссык-Кульская область',
+      regionNameKg: 'Ысык-Көл облусу',
+      prompt: [],
+    },
+    {
+      id: 3,
+      nameRu: 'Нарын',
+      nameKg: 'Нарын',
+      nameEn: 'Naryn',
+      type: 'city',
+      regionId: 3,
+      regionNameRu: 'Нарынская область',
+      regionNameKg: 'Нарын облусу',
+      prompt: [],
+    },
+    {
+      id: 8,
+      nameRu: 'Баткен',
+      nameKg: 'Баткен',
+      nameEn: 'Batken',
+      type: 'city',
+      regionId: 5,
+      regionNameRu: 'Баткенская область',
+      regionNameKg: 'Баткен облусу',
+      prompt: [],
+    },
+    {
+      id: 501,
+      nameRu: 'Кадамжай',
+      nameKg: 'Кадамжай',
+      nameEn: 'Kadamjai',
+      type: 'city',
+      regionId: 5,
+      regionNameRu: 'Баткенская область',
+      regionNameKg: 'Баткен облусу',
+      prompt: [],
+    },
   ] as const;
   for (const c of cities) {
     await prisma.city.upsert({
