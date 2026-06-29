@@ -1,8 +1,10 @@
 import type { PrismaClient } from '@prisma/client';
-import { Bot, type Context } from 'grammy';
+import { Bot, type Context, InlineKeyboard } from 'grammy';
 import { env } from '@/config/env.js';
 import { logger } from '@/lib/logger.js';
 import { handleTelegramLinkToken, handleBotLoginToken } from '@/modules/auth/auth.otp.js';
+import { createBookingsService } from '@/modules/bookings/bookings.service.js';
+import { AppError } from '@/lib/errors.js';
 import type {
   Notifier,
   PublicBooking,
@@ -120,10 +122,48 @@ function formatDepartureDate(d: Date, lang: 'ru' | 'kg'): string {
   }
 }
 
+// Mini App base for deep-link buttons (TZ §8.6 routes). Telegram `web_app`
+// buttons require HTTPS, so on a plain-http dev host we omit them entirely
+// (callback Accept/Reject buttons still work — they carry no URL).
+const MINI_APP_URL = (env.MINI_APP_URL ?? env.BASE_URL).replace(/\/$/, '');
+const MINI_APP_HTTPS = MINI_APP_URL.startsWith('https://');
+
+function miniAppUrl(path: string): string {
+  return `${MINI_APP_URL}${path}`;
+}
+
+const L = (lang: 'ru' | 'kg', ru: string, kg: string): string => (lang === 'kg' ? kg : ru);
+
+// Map a thrown AppError to a short localized toast for the callback button.
+function bookingDecisionError(err: unknown, lang: 'ru' | 'kg'): string {
+  if (err instanceof AppError) {
+    switch (err.code) {
+      case 'FORBIDDEN':
+        return L(lang, 'Это не ваша поездка', 'Бул сиздин сапарыңыз эмес');
+      case 'SEATS_NOT_AVAILABLE':
+        return L(lang, 'Мест больше нет', 'Орун калган жок');
+      case 'TRIP_NOT_ACTIVE':
+        return L(lang, 'Поездка неактивна', 'Сапар активдүү эмес');
+      case 'CONFLICT':
+        return L(lang, 'Запрос уже обработан', 'Арыз мурунтан иштелген');
+      case 'NOT_FOUND':
+        return L(lang, 'Запрос не найден', 'Арыз табылган жок');
+      default:
+        break;
+    }
+  }
+  return L(lang, 'Ошибка. Откройте приложение.', 'Ката. Колдонмону ачыңыз.');
+}
+
 export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
   const { prisma, bot } = deps;
 
-  async function send(userId: string, tpl: MessageTemplate, vars: Vars): Promise<void> {
+  async function send(
+    userId: string,
+    tpl: MessageTemplate,
+    vars: Vars,
+    keyboard?: (lang: 'ru' | 'kg') => InlineKeyboard | undefined,
+  ): Promise<void> {
     if (!bot) return;
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -132,8 +172,12 @@ export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
     if (!user || !user.telegramId || !user.notificationsEnabled) return;
     const lang: 'ru' | 'kg' = user.language === 'kg' ? 'kg' : 'ru';
     const text = render(tpl, lang, vars);
+    const kb = keyboard?.(lang);
     try {
-      await bot.api.sendMessage(Number(user.telegramId), text, { parse_mode: 'HTML' });
+      await bot.api.sendMessage(Number(user.telegramId), text, {
+        parse_mode: 'HTML',
+        ...(kb ? { reply_markup: kb } : {}),
+      });
     } catch (err) {
       logger.warn({ err, userId }, 'telegram send failed');
     }
@@ -144,18 +188,38 @@ export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
       const ratingSuffix = passengerRating !== null
         ? ` (★ ${passengerRating.toFixed(1)})`
         : '';
-      await send(driverUserId, T.new_booking_request, {
-        passengerName,
-        ratingSuffix,
-        from: trip.originCity,
-        to: trip.destinationCity,
-        date: formatDepartureDate(trip.departureAt, 'ru'),
-        seats: booking.seatsCount,
-      });
+      await send(
+        driverUserId,
+        T.new_booking_request,
+        {
+          passengerName,
+          ratingSuffix,
+          from: trip.originCity,
+          to: trip.destinationCity,
+          date: formatDepartureDate(trip.departureAt, 'ru'),
+          seats: booking.seatsCount,
+        },
+        (lang) => {
+          const kb = new InlineKeyboard()
+            .text(L(lang, '✅ Принять', '✅ Кабыл алуу'), `accept_booking_${booking.id}`)
+            .text(L(lang, '❌ Отклонить', '❌ Четке кагуу'), `reject_booking_${booking.id}`);
+          if (MINI_APP_HTTPS) {
+            kb.row().webApp(L(lang, '→ Открыть', '→ Ачуу'), miniAppUrl(`/bookings/${booking.id}`));
+          }
+          return kb;
+        },
+      );
     },
     async bookingAccepted(passengerUserId, { booking }) {
       const driverName = await driverNameForBooking(prisma, booking);
-      await send(passengerUserId, T.booking_accepted, { driverName });
+      await send(passengerUserId, T.booking_accepted, { driverName }, (lang) =>
+        MINI_APP_HTTPS
+          ? new InlineKeyboard().webApp(
+              L(lang, '💬 Чат', '💬 Чат'),
+              miniAppUrl(`/bookings/${booking.id}/chat`),
+            )
+          : undefined,
+      );
     },
     async bookingRequestConfirmed() {
       // Telegram delivery for driver confirmation is not needed — in-app bell only.
@@ -192,19 +256,32 @@ export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
         select: { name: true },
       });
       const preview = message.text.length > 80 ? `${message.text.slice(0, 80)}…` : message.text;
-      await send(recipientUserId, T.chat_message, {
-        senderName: sender?.name ?? '—',
-        preview,
-      });
+      await send(
+        recipientUserId,
+        T.chat_message,
+        { senderName: sender?.name ?? '—', preview },
+        (lang) =>
+          MINI_APP_HTTPS
+            ? new InlineKeyboard().webApp(
+                L(lang, '→ Ответить', '→ Жооп берүү'),
+                miniAppUrl(`/bookings/${message.bookingId}/chat`),
+              )
+            : undefined,
+      );
     },
     async messageRead() {
       // Too noisy for Telegram — kept in app only.
     },
     async ratingReceived(rateeUserId, payload) {
-      await send(rateeUserId, T.rating_received, {
-        raterName: payload.raterName,
-        score: payload.score,
-      });
+      await send(
+        rateeUserId,
+        T.rating_received,
+        { raterName: payload.raterName, score: payload.score },
+        (lang) =>
+          MINI_APP_HTTPS
+            ? new InlineKeyboard().webApp(L(lang, '→ Посмотреть', '→ Көрүү'), miniAppUrl('/profile'))
+            : undefined,
+      );
     },
     async ratingWarning(userId, payload) {
       await send(userId, T.rating_warning, { rating: payload.rating });
@@ -323,7 +400,12 @@ export function composeNotifiers(...notifiers: Notifier[]): Notifier {
 }
 
 // ─── Bot bootstrap + command handlers ─────────────────────────────
-export async function startTelegramBot(prisma: PrismaClient): Promise<Bot | null> {
+export async function startTelegramBot(
+  prisma: PrismaClient,
+  // Lazy getter — the notifier wraps this bot, so it doesn't exist yet at boot.
+  // index.ts sets it right after construction; callbacks read it at fire time.
+  getNotifier: () => Notifier | null = () => null,
+): Promise<Bot | null> {
   if (!env.TELEGRAM_BOT_TOKEN) {
     logger.info('TELEGRAM_BOT_TOKEN not set — Telegram bot disabled');
     return null;
@@ -342,13 +424,13 @@ export async function startTelegramBot(prisma: PrismaClient): Promise<Bot | null
     ])
     .catch((err: unknown) => logger.warn({ err }, 'setMyCommands failed'));
 
-  if (env.BASE_URL.startsWith('https://')) {
+  if (MINI_APP_HTTPS) {
     await bot.api
       .setChatMenuButton({
         menu_button: {
           type: 'web_app',
           text: '🚗 Открыть Tappjet',
-          web_app: { url: env.BASE_URL },
+          web_app: { url: MINI_APP_URL },
         },
       })
       .catch((err: unknown) => logger.warn({ err }, 'setChatMenuButton failed'));
@@ -390,21 +472,14 @@ export async function startTelegramBot(prisma: PrismaClient): Promise<Bot | null
       `💬 Встроенный чат\n` +
       `📱 Работает прямо в Telegram`;
 
-    const isHttps = env.BASE_URL.startsWith('https://');
-    await ctx.reply(text, {
-      parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [
-          ...(isHttps
-            ? [[{ text: '🚗 Открыть Tappjet', web_app: { url: env.BASE_URL } }]]
-            : []),
-          [
-            { text: 'ℹ️ Помощь', callback_data: 'help' },
-            { text: '🔔 Уведомления', callback_data: 'notify' },
-          ],
-        ],
-      },
-    });
+    const kb = new InlineKeyboard();
+    if (MINI_APP_HTTPS) {
+      kb.webApp('🔍 Найти машину', miniAppUrl('/trips')).row();
+      kb.webApp('🚗 Найти пассажира', miniAppUrl('/trips')).row();
+    }
+    kb.text('🌐 Язык', 'lang').text('🔔 Уведомления', 'notify').row();
+    kb.text('ℹ️ Помощь', 'help');
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
   });
 
   bot.callbackQuery('help', async (ctx) => {
@@ -426,6 +501,65 @@ export async function startTelegramBot(prisma: PrismaClient): Promise<Bot | null
     await prisma.user.update({ where: { id: user.id }, data: { notificationsEnabled: next } });
     await ctx.reply(next ? '🔔 Уведомления включены.' : '🔕 Уведомления отключены.');
   });
+
+  bot.callbackQuery('lang', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    const user = await prisma.user.findFirst({ where: { telegramId: BigInt(ctx.from.id) } });
+    if (!user) {
+      await ctx.reply('Войдите через приложение.');
+      return;
+    }
+    const next = user.language === 'ru' ? 'kg' : 'ru';
+    await prisma.user.update({ where: { id: user.id }, data: { language: next } });
+    await ctx.reply(next === 'kg' ? 'Тил: кыргызча' : 'Язык: русский');
+  });
+
+  // ─── Accept / Reject a booking straight from the notification ────────
+  // Reuses bookingsService — which enforces driver ownership and the seat
+  // transaction — so the bot path is exactly as safe as the REST path.
+  const decide = async (
+    ctx: Context,
+    action: 'accept' | 'reject',
+    bookingId: string,
+  ): Promise<void> => {
+    if (!ctx.from) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const user = await prisma.user.findFirst({ where: { telegramId: BigInt(ctx.from.id) } });
+    if (!user) {
+      await ctx.answerCallbackQuery({ text: 'Войдите через приложение', show_alert: true });
+      return;
+    }
+    const notifier = getNotifier();
+    if (!notifier) {
+      await ctx.answerCallbackQuery({
+        text: 'Сервис недоступен — откройте приложение',
+        show_alert: true,
+      });
+      return;
+    }
+    const lang: 'ru' | 'kg' = user.language === 'kg' ? 'kg' : 'ru';
+    const bookings = createBookingsService(prisma, notifier);
+    try {
+      if (action === 'accept') await bookings.accept(bookingId, user.id);
+      else await bookings.reject(bookingId, user.id);
+      const ok =
+        action === 'accept'
+          ? L(lang, '✅ Принято. Чат открыт.', '✅ Кабыл алынды. Чат ачылды.')
+          : L(lang, '❌ Отклонено', '❌ Четке кагылды');
+      await ctx.answerCallbackQuery({ text: ok });
+      // Drop the buttons so the request can't be actioned twice.
+      await ctx.editMessageReplyMarkup().catch(() => undefined);
+    } catch (err) {
+      logger.warn({ err, bookingId, action }, 'bot booking decision failed');
+      await ctx.answerCallbackQuery({ text: bookingDecisionError(err, lang), show_alert: true });
+    }
+  };
+
+  bot.callbackQuery(/^accept_booking_(.+)$/, (ctx) => decide(ctx, 'accept', ctx.match[1]!));
+  bot.callbackQuery(/^reject_booking_(.+)$/, (ctx) => decide(ctx, 'reject', ctx.match[1]!));
 
   bot.command('help', (ctx: Context) =>
     ctx.reply(
