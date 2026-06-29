@@ -497,6 +497,22 @@ model ListingLike {
   @@map("listing_likes")
 }
 
+// ─── Listing views (polymorphic, deduped per unique viewer) ──────────
+// One row per (listing, viewer) — UNIQUE makes views_count count unique people,
+// not refreshes. viewer_key = "u:<userId>" (authenticated) or "a:<anonId>"
+// (anonymous client session). Owner self-views are never recorded.
+model ListingView {
+  id         String   @id @default(uuid()) @db.Uuid
+  targetType String   @map("target_type") @db.VarChar(20)
+  targetId   String   @map("target_id") @db.Uuid
+  viewerKey  String   @map("viewer_key") @db.VarChar(80)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([targetType, targetId, viewerKey])
+  @@index([targetType, targetId])
+  @@map("listing_views")
+}
+
 // ─── Telegram registration link tokens ───────────────────────────────
 // Ties a web registration session to a Telegram chat so OTP can be
 // delivered via bot instead of SMS. TTL = 10 minutes.

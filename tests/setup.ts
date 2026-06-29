@@ -47,6 +47,7 @@ const TABLES = [
   'passenger_request_responses',
   'passenger_requests',
   'listing_likes',
+  'listing_views',
   'bookings',
   'trips',
   'auth_providers',
