@@ -16,28 +16,24 @@ async function tripViews(id: string): Promise<number> {
   return t.viewsCount;
 }
 
-// recordView is fire-and-forget on the HTTP path — poll until it lands.
-async function waitTripViews(id: string, expected: number, tries = 40): Promise<number> {
-  for (let i = 0; i < tries; i++) {
-    const v = await tripViews(id);
-    if (v >= expected) return v;
-    await new Promise((r) => setTimeout(r, 25));
-  }
-  return tripViews(id);
-}
-
 describe('engagement service (unit)', () => {
-  it('recordView increments for others/anon but skips the owner self-view', async () => {
+  it('recordView counts unique viewers, dedups repeats, skips owner & keyless', async () => {
     const driver = await createVerifiedDriver(testPrisma);
     const trip = await createTrip(testPrisma, driver.id);
     const eng = createEngagementService(testPrisma);
 
-    await eng.recordView('trip', trip.id, driver.id, driver.id); // owner → skip
+    await eng.recordView('trip', trip.id, { userId: driver.id, anonId: null }); // owner → skip
+    await eng.recordView('trip', trip.id, { userId: null, anonId: null }); // no key → skip
     expect(await tripViews(trip.id)).toBe(0);
 
     const other = await createUser(testPrisma);
-    await eng.recordView('trip', trip.id, null, driver.id); // anonymous → count
-    await eng.recordView('trip', trip.id, other.id, driver.id); // other user → count
+    await eng.recordView('trip', trip.id, { userId: null, anonId: 'anon-1' }); // anon → +1
+    await eng.recordView('trip', trip.id, { userId: other.id, anonId: null }); // user → +1
+    expect(await tripViews(trip.id)).toBe(2);
+
+    // Repeats by the same viewers do not double-count (unique viewers).
+    await eng.recordView('trip', trip.id, { userId: null, anonId: 'anon-1' });
+    await eng.recordView('trip', trip.id, { userId: other.id, anonId: null });
     expect(await tripViews(trip.id)).toBe(2);
   });
 
@@ -93,11 +89,28 @@ describe('trip engagement (HTTP)', () => {
       .expect(200, { liked: false });
   });
 
-  it('anonymous GET detail increments the view counter', async () => {
+  it('POST /:id/view counts a unique anonymous view and dedups repeats', async () => {
     const driver = await createVerifiedDriver(testPrisma);
     const trip = await createTrip(testPrisma, driver.id);
-    await request(app).get(`/v1/trips/${trip.id}`).expect(200);
-    expect(await waitTripViews(trip.id, 1)).toBe(1);
+    const anonId = '11111111-1111-1111-1111-111111111111';
+
+    await request(app).post(`/v1/trips/${trip.id}/view`).send({ anonId }).expect(204);
+    expect(await tripViews(trip.id)).toBe(1);
+
+    // Same anonymous visitor again → still 1 (deduped).
+    await request(app).post(`/v1/trips/${trip.id}/view`).send({ anonId }).expect(204);
+    expect(await tripViews(trip.id)).toBe(1);
+  });
+
+  it('GET detail no longer changes the view counter (counting is client-driven)', async () => {
+    const driver = await createVerifiedDriver(testPrisma);
+    const trip = await createTrip(testPrisma, driver.id);
+    const viewer = await createUser(testPrisma);
+    await request(app)
+      .get(`/v1/trips/${trip.id}`)
+      .set('Authorization', `Bearer ${viewer.accessToken}`)
+      .expect(200);
+    expect(await tripViews(trip.id)).toBe(0);
   });
 });
 

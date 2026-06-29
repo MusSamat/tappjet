@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import type { PrismaClient } from '@prisma/client';
 import { createTripsService } from './trips.service.js';
 import type { Notifier } from '@/lib/notifier.js';
@@ -94,6 +95,22 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
     validate({ params: TripIdParam }),
     asyncHandler(async (req, res) => {
       res.json(await service.unlike(req.params.id!, req.user!.id));
+    }),
+  );
+
+  // Record a unique view on detail open. Public (lists/details are open to all):
+  // authenticated → counted by user; anonymous → counted by client anonId.
+  router.post(
+    '/:id/view',
+    optionalAuth,
+    validate({ params: TripIdParam, body: z.object({ anonId: z.string().uuid().optional() }) }),
+    asyncHandler(async (req, res) => {
+      const { anonId } = req.body as { anonId?: string };
+      await service.recordView(req.params.id!, {
+        userId: req.user?.id ?? null,
+        anonId: anonId ?? null,
+      });
+      res.status(204).send();
     }),
   );
 

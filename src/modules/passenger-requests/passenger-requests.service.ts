@@ -200,7 +200,7 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     });
     if (!row) throw Errors.notFound('PassengerRequest');
     const liked = await engagement.isLiked('passenger_request', id, viewerId);
-    void engagement.recordView('passenger_request', id, viewerId, row.passengerId);
+    // Views are counted via an explicit client POST /:id/view, not on read.
     return toDTO(row, { liked, isOwner: viewerId !== null && row.passengerId === viewerId });
   }
 
@@ -211,12 +211,19 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     return { liked: true };
   }
 
+  async function recordView(
+    id: string,
+    viewer: { userId: string | null; anonId: string | null },
+  ): Promise<void> {
+    await engagement.recordView('passenger_request', id, viewer);
+  }
+
   async function unlike(id: string, userId: string): Promise<{ liked: boolean }> {
     await engagement.unlike('passenger_request', id, userId);
     return { liked: false };
   }
 
-  return { create, list, listMy, cancel, getById, like, unlike };
+  return { create, list, listMy, cancel, getById, like, unlike, recordView };
 }
 
 // ─── Response DTO ─────────────────────────────────────────────────────

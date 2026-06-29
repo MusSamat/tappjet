@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import type { PrismaClient } from '@prisma/client';
 import type { Notifier } from '@/lib/notifier.js';
 import { createPassengerRequestsService, createPassengerRequestResponsesService } from './passenger-requests.service.js';
@@ -69,6 +70,21 @@ export function createPassengerRequestsRouter(prisma: PrismaClient, notifier: No
     validate({ params: RequestIdParam }),
     asyncHandler(async (req, res) => {
       res.json(await service.unlike(req.params.id!, req.user!.id));
+    }),
+  );
+
+  // Record a unique view on detail open (public: authed → by user, anon → by anonId).
+  router.post(
+    '/:id/view',
+    optionalAuth,
+    validate({ params: RequestIdParam, body: z.object({ anonId: z.string().uuid().optional() }) }),
+    asyncHandler(async (req, res) => {
+      const { anonId } = req.body as { anonId?: string };
+      await service.recordView(req.params.id!, {
+        userId: req.user?.id ?? null,
+        anonId: anonId ?? null,
+      });
+      res.status(204).send();
     }),
   );
 

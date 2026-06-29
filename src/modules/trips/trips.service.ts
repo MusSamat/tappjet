@@ -88,6 +88,7 @@ export interface TripsService {
   ): Promise<{ data: TripListItem[]; nextCursor: string | null }>;
   like(id: string, userId: string): Promise<{ liked: boolean }>;
   unlike(id: string, userId: string): Promise<{ liked: boolean }>;
+  recordView(id: string, viewer: { userId: string | null; anonId: string | null }): Promise<void>;
   priceSuggestion(from: string, to: string): Promise<{
     averagePrice: number | null;
     sampleSize: number;
@@ -383,8 +384,8 @@ export function createTripsService(
       engagement.isLiked('trip', id, viewerId),
     ]);
 
-    // Count the open (skips the owner's own views), fire-and-forget.
-    void engagement.recordView('trip', id, viewerId, row.driverId);
+    // Views are counted via an explicit client POST /trips/:id/view, not here —
+    // so SSR / crawlers / prefetch don't inflate the count.
 
     return {
       ...toListItem(row, { liked, isOwner: viewerId !== null && row.driverId === viewerId }),
@@ -567,6 +568,14 @@ export function createTripsService(
     return { liked: false };
   }
 
+  // Record a unique view (deduped; owner self-views ignored). Fire-and-forget.
+  async function recordView(
+    id: string,
+    viewer: { userId: string | null; anonId: string | null },
+  ): Promise<void> {
+    await engagement.recordView('trip', id, viewer);
+  }
+
   // ─── Manual complete ────────────────────────────────────────────────
   async function complete(
     id: string,
@@ -679,6 +688,7 @@ export function createTripsService(
     myTrips,
     like,
     unlike,
+    recordView,
     priceSuggestion,
   };
 }

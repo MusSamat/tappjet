@@ -4,10 +4,13 @@ import { logger } from '@/lib/logger.js';
 /**
  * Shared engagement (views + likes) for trips and passenger requests.
  *
- * Design (per product decision):
- *   • views — total opens of a listing's detail; a denormalized counter on the
- *     target row (no per-view rows since unique reach isn't tracked). Owner's
- *     own opens are not counted.
+ * Design:
+ *   • views — UNIQUE viewers (not raw opens): one `listing_views` row per
+ *     (listing, viewer_key), where viewer_key is "u:<userId>" for logged-in
+ *     users or "a:<anonId>" for anonymous visitors (lists/details are public).
+ *     views_count is incremented only on the first unique view. Owner self-views
+ *     are never counted. Counting is triggered by an explicit client call on
+ *     detail open (not server-side / SSR), so crawlers & prefetch don't inflate.
  *   • likes — polymorphic `listing_likes` table (target_type, target_id, user_id)
  *     with a UNIQUE that makes like a toggle; likes_count denormalized for reads.
  */
@@ -31,22 +34,42 @@ export function createEngagementService(prisma: PrismaClient) {
   }
 
   /**
-   * Increment the view counter. Fire-and-forget at call sites — never block or
-   * fail the read it rides on. Skips the owner's own views.
+   * Record a unique view. Fire-and-forget — never blocks. Counts at most once per
+   * viewer per listing; owner self-views and viewers without a key are ignored.
    */
   async function recordView(
     target: ListingTarget,
     id: string,
-    viewerId: string | null,
-    ownerId: string,
+    viewer: { userId: string | null; anonId: string | null },
   ): Promise<void> {
-    if (viewerId && viewerId === ownerId) return;
+    const viewerKey = viewer.userId
+      ? `u:${viewer.userId}`
+      : viewer.anonId
+        ? `a:${viewer.anonId}`
+        : null;
+    if (!viewerKey) return; // can't dedup → don't count
+
+    const ownerId =
+      target === 'trip'
+        ? (await prisma.trip.findUnique({ where: { id }, select: { driverId: true } }))?.driverId
+        : (await prisma.passengerRequest.findUnique({ where: { id }, select: { passengerId: true } }))
+            ?.passengerId;
+    if (!ownerId) return; // listing gone
+    if (viewer.userId && viewer.userId === ownerId) return; // skip owner self-view
+
     try {
-      await counter(prisma, target).update({
-        where: { id },
-        data: { viewsCount: { increment: 1 } },
+      await prisma.$transaction(async (tx) => {
+        await tx.listingView.create({ data: { targetType: target, targetId: id, viewerKey } });
+        await counter(tx, target).update({
+          where: { id },
+          data: { viewsCount: { increment: 1 } },
+        });
       });
     } catch (err) {
+      // P2002 = this viewer already counted → unique view, no-op.
+      if (typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002') {
+        return;
+      }
       logger.warn({ err, target, id }, 'recordView failed');
     }
   }
