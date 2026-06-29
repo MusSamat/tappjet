@@ -125,6 +125,7 @@ export const openapiDocument = {
                   roles: { type: 'array', items: { type: 'string' } },
                   language: { type: 'string', enum: ['ru', 'kg'] },
                   phoneVerified: { type: 'boolean' },
+                  telegramLinked: { type: 'boolean' },
                   providers: {
                     type: 'array',
                     items: { type: 'string', enum: ['telegram', 'google', 'apple', 'phone'] },

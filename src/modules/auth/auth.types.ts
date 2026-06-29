@@ -16,6 +16,7 @@ export interface AuthResult extends TokenPair {
     roles: Role[];
     language: string;
     phoneVerified: boolean;
+    telegramLinked: boolean;
     providers: Provider[];
   };
   kind: 'full';
