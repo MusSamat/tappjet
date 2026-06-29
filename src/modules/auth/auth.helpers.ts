@@ -82,6 +82,7 @@ export async function issueFullAuthForUser(
       roles: user.roles as Role[],
       language: user.language,
       phoneVerified: user.phoneVerifiedAt !== null,
+      telegramLinked: user.telegramId !== null,
       providers,
     },
     kind: 'full',
