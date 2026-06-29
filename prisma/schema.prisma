@@ -57,6 +57,7 @@ model User {
   loyaltyTransactions LoyaltyTransaction[]
   passengerRequests     PassengerRequest[]
   requestResponses      PassengerRequestResponse[] @relation("RequestResponseDriver")
+  listingLikes          ListingLike[]
 
   @@index([deletedAt])
   @@index([language])
@@ -124,6 +125,8 @@ model Trip {
   status               String    @default("active") @db.VarChar(20)
   cancelledReason      String?   @map("cancelled_reason")
   idempotencyKey       String?   @unique @map("idempotency_key") @db.VarChar(100)
+  viewsCount           Int       @default(0) @map("views_count")
+  likesCount           Int       @default(0) @map("likes_count")
   createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   version              Int       @default(1)
@@ -435,6 +438,8 @@ model PassengerRequest {
   flexible        Boolean   @default(false)
   comment         String?   @db.VarChar(500)
   status          String    @default("open") @db.VarChar(20)
+  viewsCount      Int       @default(0) @map("views_count")
+  likesCount      Int       @default(0) @map("likes_count")
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -471,6 +476,25 @@ model PassengerRequestResponse {
   @@index([driverId])
   @@index([expiresAt])
   @@map("passenger_request_responses")
+}
+
+// ─── Listing likes (polymorphic: trips + passenger requests) ─────────
+// target_type: 'trip' | 'passenger_request'. Polymorphic by design (no FK on
+// target_id) so one table serves both listing kinds — denormalized likes_count
+// lives on the target row for cheap reads. UNIQUE(target,user) makes like a toggle.
+model ListingLike {
+  id         String   @id @default(uuid()) @db.Uuid
+  targetType String   @map("target_type") @db.VarChar(20)
+  targetId   String   @map("target_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([targetType, targetId, userId])
+  @@index([targetType, targetId])
+  @@index([userId])
+  @@map("listing_likes")
 }
 
 // ─── Telegram registration link tokens ───────────────────────────────

@@ -271,6 +271,13 @@ export const openapiDocument = {
           luggage: { type: 'string', enum: ['yes', 'small', 'no'] },
           status: { type: 'string', enum: ['active', 'completed', 'cancelled'] },
           createdAt: { type: 'string', format: 'date-time' },
+          liked: { type: 'boolean', description: 'Whether the requesting viewer liked this listing' },
+          metrics: {
+            type: 'object',
+            nullable: true,
+            description: 'Engagement stats — present only when the viewer is the creator',
+            properties: { views: { type: 'integer' }, likes: { type: 'integer' } },
+          },
         },
       },
       TripDetail: {
@@ -1156,6 +1163,32 @@ export const openapiDocument = {
         summary: 'Cancel own trip',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
         responses: { '200': { description: 'Cancelled' }, ...errorResponses },
+      },
+    },
+    '/trips/{id}/like': {
+      post: {
+        tags: ['Trips'],
+        summary: 'Like a trip',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          '200': {
+            description: 'Liked',
+            content: { 'application/json': { schema: { type: 'object', properties: { liked: { type: 'boolean' } } } } },
+          },
+          ...errorResponses,
+        },
+      },
+      delete: {
+        tags: ['Trips'],
+        summary: 'Remove a trip like',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          '200': {
+            description: 'Unliked',
+            content: { 'application/json': { schema: { type: 'object', properties: { liked: { type: 'boolean' } } } } },
+          },
+          ...errorResponses,
+        },
       },
     },
     '/routes/price-suggestion': {

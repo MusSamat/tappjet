@@ -6,6 +6,7 @@ import { cursorArgs, sliceAndNext } from '@/lib/pagination.js';
 import { estimateDurationMin } from '@/lib/routes.js';
 import { logger } from '@/lib/logger.js';
 import type { Notifier } from '@/lib/notifier.js';
+import { createEngagementService } from '@/lib/engagement.js';
 import { POINTS_PER_TRIP, tierForPoints } from '@/modules/loyalty/loyalty.service.js';
 import type {
   MyTripsInput,
@@ -47,6 +48,9 @@ export interface TripListItem {
   luggage: string;
   status: string;
   createdAt: Date;
+  // Engagement: like state for the viewer; metrics only for the creator (driver).
+  liked: boolean;
+  metrics: { views: number; likes: number } | null;
 }
 
 export interface TripDetail extends TripListItem {
@@ -70,8 +74,11 @@ export interface TripsService {
     body: TripCreateInput,
     idempotencyKey: string,
   ): Promise<{ trip: TripDetail; reused: boolean }>;
-  search(query: TripSearchInput): Promise<{ data: TripListItem[]; nextCursor: string | null }>;
-  getById(id: string): Promise<TripDetail>;
+  search(
+    query: TripSearchInput,
+    viewerId?: string | null,
+  ): Promise<{ data: TripListItem[]; nextCursor: string | null }>;
+  getById(id: string, viewerId?: string | null): Promise<TripDetail>;
   patch(id: string, driverUserId: string, patch: TripPatchInput): Promise<TripDetail>;
   cancel(id: string, driverUserId: string, reason?: string): Promise<{ status: 'cancelled' }>;
   complete(id: string, driverUserId: string): Promise<{ status: 'completed' }>;
@@ -79,6 +86,8 @@ export interface TripsService {
     driverUserId: string,
     query: MyTripsInput,
   ): Promise<{ data: TripListItem[]; nextCursor: string | null }>;
+  like(id: string, userId: string): Promise<{ liked: boolean }>;
+  unlike(id: string, userId: string): Promise<{ liked: boolean }>;
   priceSuggestion(from: string, to: string): Promise<{
     averagePrice: number | null;
     sampleSize: number;
@@ -89,6 +98,8 @@ export function createTripsService(
   prisma: PrismaClient,
   notifier?: Notifier,
 ): TripsService {
+  const engagement = createEngagementService(prisma);
+
   // Validate driver-provided route cities (pickup/dropoff points): each must
   // exist in the City directory and not be the trip's own origin/destination.
   // Any region is allowed. Returns the deduped list.
@@ -220,7 +231,7 @@ export function createTripsService(
           idempotencyKey,
         },
       });
-      return { trip: await getById(created.id), reused: false };
+      return { trip: await getById(created.id, driverUserId), reused: false };
     } catch (err) {
       throw mapPrismaError(err);
     }
@@ -229,6 +240,7 @@ export function createTripsService(
   // ─── Search ─────────────────────────────────────────────────────────
   async function search(
     query: TripSearchInput,
+    viewerId: string | null = null,
   ): Promise<{ data: TripListItem[]; nextCursor: string | null }> {
     if (query.from_city && query.to_city && query.from_city === query.to_city) {
       throw Errors.validation({ reason: 'cities_must_differ' });
@@ -324,12 +336,18 @@ export function createTripsService(
       },
     });
 
-    const mapped = rows.map(toListItem);
+    const likedSet = await engagement.likedIds('trip', rows.map((r) => r.id), viewerId);
+    const mapped = rows.map((r) =>
+      toListItem(r, {
+        liked: likedSet.has(r.id),
+        isOwner: viewerId !== null && r.driverId === viewerId,
+      }),
+    );
     return sliceAndNext(mapped, query.limit);
   }
 
   // ─── Detail ─────────────────────────────────────────────────────────
-  async function getById(id: string): Promise<TripDetail> {
+  async function getById(id: string, viewerId: string | null = null): Promise<TripDetail> {
     const row = await prisma.trip.findUnique({
       where: { id },
       include: {
@@ -355,15 +373,21 @@ export function createTripsService(
     });
     if (!row) throw Errors.notFound('Trip');
 
-    const recentRatings = await prisma.rating.findMany({
-      where: { rateeId: row.driverId },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-      include: { rater: { select: { name: true, deletedAt: true } } },
-    });
+    const [recentRatings, liked] = await Promise.all([
+      prisma.rating.findMany({
+        where: { rateeId: row.driverId },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        include: { rater: { select: { name: true, deletedAt: true } } },
+      }),
+      engagement.isLiked('trip', id, viewerId),
+    ]);
+
+    // Count the open (skips the owner's own views), fire-and-forget.
+    void engagement.recordView('trip', id, viewerId, row.driverId);
 
     return {
-      ...toListItem(row),
+      ...toListItem(row, { liked, isOwner: viewerId !== null && row.driverId === viewerId }),
       comment: row.comment,
       preferences: (row.preferences ?? {}) as Record<string, boolean>,
       waypoints: (row.waypoints as Array<{ city: string; address?: string }>) ?? [],
@@ -523,7 +547,24 @@ export function createTripsService(
       },
     });
 
-    return sliceAndNext(rows.map(toListItem), query.limit);
+    const likedSet = await engagement.likedIds('trip', rows.map((r) => r.id), driverUserId);
+    return sliceAndNext(
+      rows.map((r) => toListItem(r, { liked: likedSet.has(r.id), isOwner: true })),
+      query.limit,
+    );
+  }
+
+  // ─── Like / unlike ──────────────────────────────────────────────────
+  async function like(id: string, userId: string): Promise<{ liked: boolean }> {
+    const trip = await prisma.trip.findUnique({ where: { id }, select: { id: true } });
+    if (!trip) throw Errors.notFound('Trip');
+    await engagement.like('trip', id, userId);
+    return { liked: true };
+  }
+
+  async function unlike(id: string, userId: string): Promise<{ liked: boolean }> {
+    await engagement.unlike('trip', id, userId);
+    return { liked: false };
   }
 
   // ─── Manual complete ────────────────────────────────────────────────
@@ -636,6 +677,8 @@ export function createTripsService(
     cancel,
     complete,
     myTrips,
+    like,
+    unlike,
     priceSuggestion,
   };
 }
@@ -665,7 +708,10 @@ type TripRow = Prisma.TripGetPayload<{
   };
 }>;
 
-function toListItem(row: TripRow): TripListItem {
+function toListItem(
+  row: TripRow,
+  opts: { liked: boolean; isOwner: boolean },
+): TripListItem {
   const dp = row.driver.driverProfile;
   return {
     id: row.id,
@@ -703,6 +749,8 @@ function toListItem(row: TripRow): TripListItem {
     luggage: row.luggage,
     status: row.status,
     createdAt: row.createdAt,
+    liked: opts.liked,
+    metrics: opts.isOwner ? { views: row.viewsCount, likes: row.likesCount } : null,
   };
 }
 

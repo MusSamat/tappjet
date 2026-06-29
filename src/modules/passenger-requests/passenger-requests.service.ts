@@ -1,6 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { Errors } from '@/lib/errors.js';
 import { toFileUrl } from '@/lib/uploads.js';
+import { createEngagementService } from '@/lib/engagement.js';
 import type { Notifier } from '@/lib/notifier.js';
 import type { CreatePassengerRequestInput, ListRequestsInput, RespondInput } from './passenger-requests.schemas.js';
 
@@ -15,6 +16,8 @@ export interface PassengerRequestDTO {
   comment: string | null;
   status: string;
   createdAt: string;
+  liked: boolean;
+  metrics: { views: number; likes: number } | null;
   passenger: {
     id: string;
     name: string;
@@ -26,25 +29,30 @@ export interface PassengerRequestDTO {
 
 const RATING_VISIBLE_AFTER = 3;
 
-function toDTO(row: {
-  id: string;
-  passengerId: string;
-  originCity: string;
-  destinationCity: string;
-  seatsNeeded: number;
-  departureDate: Date;
-  flexible: boolean;
-  comment: string | null;
-  status: string;
-  createdAt: Date;
-  passenger: {
+function toDTO(
+  row: {
     id: string;
-    name: string;
-    avatarUrl: string | null;
-    rating: { toNumber: () => number } | number;
-    ratingCount: number;
-  };
-}): PassengerRequestDTO {
+    passengerId: string;
+    originCity: string;
+    destinationCity: string;
+    seatsNeeded: number;
+    departureDate: Date;
+    flexible: boolean;
+    comment: string | null;
+    status: string;
+    createdAt: Date;
+    viewsCount: number;
+    likesCount: number;
+    passenger: {
+      id: string;
+      name: string;
+      avatarUrl: string | null;
+      rating: { toNumber: () => number } | number;
+      ratingCount: number;
+    };
+  },
+  opts: { liked: boolean; isOwner: boolean },
+): PassengerRequestDTO {
   return {
     id: row.id,
     passengerId: row.passengerId,
@@ -56,6 +64,8 @@ function toDTO(row: {
     comment: row.comment,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
+    liked: opts.liked,
+    metrics: opts.isOwner ? { views: row.viewsCount, likes: row.likesCount } : null,
     passenger: {
       id: row.passenger.id,
       name: row.passenger.name,
@@ -80,6 +90,8 @@ const passengerSelect = {
 } as const;
 
 export function createPassengerRequestsService(prisma: PrismaClient) {
+  const engagement = createEngagementService(prisma);
+
   async function create(
     passengerId: string,
     input: CreatePassengerRequestInput,
@@ -117,10 +129,13 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
       include: { passenger: { select: passengerSelect } },
     });
 
-    return toDTO(row);
+    return toDTO(row, { liked: false, isOwner: true });
   }
 
-  async function list(input: ListRequestsInput): Promise<{ data: PassengerRequestDTO[]; nextCursor: string | null }> {
+  async function list(
+    input: ListRequestsInput,
+    viewerId: string | null = null,
+  ): Promise<{ data: PassengerRequestDTO[]; nextCursor: string | null }> {
     const take = input.limit + 1;
     const now = new Date();
 
@@ -141,8 +156,14 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
 
     const hasMore = rows.length > input.limit;
     const slice = hasMore ? rows.slice(0, input.limit) : rows;
+    const likedSet = await engagement.likedIds('passenger_request', slice.map((r) => r.id), viewerId);
     return {
-      data: slice.map(toDTO),
+      data: slice.map((r) =>
+        toDTO(r, {
+          liked: likedSet.has(r.id),
+          isOwner: viewerId !== null && r.passengerId === viewerId,
+        }),
+      ),
       nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
     };
   }
@@ -153,7 +174,11 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
       orderBy: [{ createdAt: 'desc' }],
       include: { passenger: { select: passengerSelect } },
     });
-    return { data: rows.map(toDTO), nextCursor: null };
+    const likedSet = await engagement.likedIds('passenger_request', rows.map((r) => r.id), passengerId);
+    return {
+      data: rows.map((r) => toDTO(r, { liked: likedSet.has(r.id), isOwner: true })),
+      nextCursor: null,
+    };
   }
 
   async function cancel(id: string, passengerId: string): Promise<void> {
@@ -168,16 +193,30 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     });
   }
 
-  async function getById(id: string): Promise<PassengerRequestDTO> {
+  async function getById(id: string, viewerId: string | null = null): Promise<PassengerRequestDTO> {
     const row = await prisma.passengerRequest.findUnique({
       where: { id },
       include: { passenger: { select: passengerSelect } },
     });
     if (!row) throw Errors.notFound('PassengerRequest');
-    return toDTO(row);
+    const liked = await engagement.isLiked('passenger_request', id, viewerId);
+    void engagement.recordView('passenger_request', id, viewerId, row.passengerId);
+    return toDTO(row, { liked, isOwner: viewerId !== null && row.passengerId === viewerId });
   }
 
-  return { create, list, listMy, cancel, getById };
+  async function like(id: string, userId: string): Promise<{ liked: boolean }> {
+    const req = await prisma.passengerRequest.findUnique({ where: { id }, select: { id: true } });
+    if (!req) throw Errors.notFound('PassengerRequest');
+    await engagement.like('passenger_request', id, userId);
+    return { liked: true };
+  }
+
+  async function unlike(id: string, userId: string): Promise<{ liked: boolean }> {
+    await engagement.unlike('passenger_request', id, userId);
+    return { liked: false };
+  }
+
+  return { create, list, listMy, cancel, getById, like, unlike };
 }
 
 // ─── Response DTO ─────────────────────────────────────────────────────

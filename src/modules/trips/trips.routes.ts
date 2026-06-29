@@ -13,7 +13,7 @@ import {
 } from './trips.schemas.js';
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
-import { requireAuth, requireRole } from '@/middleware/auth.js';
+import { optionalAuth, requireAuth, requireRole } from '@/middleware/auth.js';
 import { tripCreateLimit } from '@/middleware/rateLimit.js';
 import { Errors } from '@/lib/errors.js';
 
@@ -23,10 +23,12 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
 
   router.get(
     '/',
+    optionalAuth,
     validate({ query: TripSearchQuery }),
     asyncHandler(async (req, res) => {
       const result = await service.search(
         req.query as unknown as Parameters<typeof service.search>[0],
+        req.user?.id ?? null,
       );
       res.json(result);
     }),
@@ -68,10 +70,30 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
 
   router.get(
     '/:id',
+    optionalAuth,
     validate({ params: TripIdParam }),
     asyncHandler(async (req, res) => {
-      const trip = await service.getById(req.params.id!);
+      const trip = await service.getById(req.params.id!, req.user?.id ?? null);
       res.json(trip);
+    }),
+  );
+
+  // Like / unlike a trip (any authenticated user).
+  router.post(
+    '/:id/like',
+    requireAuth,
+    validate({ params: TripIdParam }),
+    asyncHandler(async (req, res) => {
+      res.json(await service.like(req.params.id!, req.user!.id));
+    }),
+  );
+
+  router.delete(
+    '/:id/like',
+    requireAuth,
+    validate({ params: TripIdParam }),
+    asyncHandler(async (req, res) => {
+      res.json(await service.unlike(req.params.id!, req.user!.id));
     }),
   );
 

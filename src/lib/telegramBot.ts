@@ -204,7 +204,7 @@ export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
             .text(L(lang, '✅ Принять', '✅ Кабыл алуу'), `accept_booking_${booking.id}`)
             .text(L(lang, '❌ Отклонить', '❌ Четке кагуу'), `reject_booking_${booking.id}`);
           if (MINI_APP_HTTPS) {
-            kb.row().webApp(L(lang, '→ Открыть', '→ Ачуу'), miniAppUrl(`/bookings/${booking.id}`));
+            kb.row().webApp(L(lang, '→ Открыть', '→ Ачуу'), miniAppUrl('/my/bookings'));
           }
           return kb;
         },
@@ -216,7 +216,7 @@ export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
         MINI_APP_HTTPS
           ? new InlineKeyboard().webApp(
               L(lang, '💬 Чат', '💬 Чат'),
-              miniAppUrl(`/bookings/${booking.id}/chat`),
+              miniAppUrl(`/my/bookings/${booking.id}/chat`),
             )
           : undefined,
       );
@@ -264,7 +264,7 @@ export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
           MINI_APP_HTTPS
             ? new InlineKeyboard().webApp(
                 L(lang, '→ Ответить', '→ Жооп берүү'),
-                miniAppUrl(`/bookings/${message.bookingId}/chat`),
+                miniAppUrl(`/my/bookings/${message.bookingId}/chat`),
               )
             : undefined,
       );
