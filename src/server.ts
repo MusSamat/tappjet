@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import swaggerUi from 'swagger-ui-express';
 import type { PrismaClient } from '@prisma/client';
 import { env, isProd } from '@/config/env.js';
+import { isAllowedOrigin } from '@/lib/cors.js';
 import { logger } from '@/lib/logger.js';
 import { requestContext } from '@/middleware/requestContext.js';
 import { globalIpLimit } from '@/middleware/rateLimit.js';
@@ -44,30 +45,14 @@ export function createApp(
   app.disable('x-powered-by');
 
   app.use(helmet({ contentSecurityPolicy: isProd ? undefined : false }));
-  const allowedOrigins = isProd
-    ? (env.ALLOWED_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean)
-    : ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001', 'https://christopher-catch-surgeon-album.trycloudflare.com'];
-
-  // Matches any localhost or 127.0.0.1 origin on any port — covers Flutter web
-  // which picks a random port (`flutter run -d chrome`).
-  const localhostRe = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
   app.use(
     cors({
-      origin: (origin, cb) => {
-        // Same-origin / server-to-server (no Origin header) — always allow.
-        if (!origin) return cb(null, true);
-        if (isProd) {
-          return allowedOrigins.includes(origin)
-            ? cb(null, true)
-            : cb(new Error(`CORS: origin ${origin} not allowed`));
-        }
-        // Dev: allow any localhost port so Flutter web, Vite, Swagger UI all work.
-        if (localhostRe.test(origin) || allowedOrigins.includes(origin)) {
-          return cb(null, true);
-        }
-        cb(new Error(`CORS: origin ${origin} not allowed`));
-      },
+      // Allowlist (incl. MINI_APP_URL) is shared with Socket.IO — see lib/cors.
+      origin: (origin, cb) =>
+        isAllowedOrigin(origin)
+          ? cb(null, true)
+          : cb(new Error(`CORS: origin ${origin} not allowed`)),
       credentials: true,
     }),
   );

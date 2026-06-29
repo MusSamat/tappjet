@@ -5,7 +5,7 @@ import { logger } from '@/lib/logger.js';
 import { disconnectPrisma, getPrisma } from '@/db/prisma.js';
 import { buildScheduler, type CronScheduler } from '@/cron/index.js';
 import { attachChatNamespace, createIoServer } from '@/ws/socketServer.js';
-import { createInProcessNotifier } from '@/lib/notifier.js';
+import { createInProcessNotifier, type Notifier } from '@/lib/notifier.js';
 import {
   composeNotifiers,
   createTelegramNotifier,
@@ -30,11 +30,16 @@ async function main(): Promise<void> {
   //   4. chat namespace (needs notifier) → 5. Express app (needs notifier).
   const server: Server = http.createServer();
   const io = createIoServer(server);
-  const bot = await startTelegramBot(prisma);
+  // Bot ↔ notifier is circular: the bot's Accept/Reject callbacks need the
+  // notifier, which itself wraps the bot. Break it with a late-bound ref the
+  // callbacks read at fire time (set synchronously below, before listen).
+  let notifierRef: Notifier | null = null;
+  const bot = await startTelegramBot(prisma, () => notifierRef);
   const notifier = composeNotifiers(
     createInProcessNotifier(prisma, io),
     createTelegramNotifier({ prisma, bot }),
   );
+  notifierRef = notifier;
   attachChatNamespace(io, prisma, notifier);
   const app = createApp(prisma, notifier, bot);
   server.on('request', app);

@@ -2,6 +2,7 @@ import type { Server as HttpServer } from 'node:http';
 import { Server as IoServer, type Socket } from 'socket.io';
 import type { PrismaClient } from '@prisma/client';
 import { verifyAccessToken } from '@/lib/jwt.js';
+import { isAllowedOrigin } from '@/lib/cors.js';
 import { logger } from '@/lib/logger.js';
 import { createChatService } from '@/modules/chat/chat.service.js';
 import { createBookingsService } from '@/modules/bookings/bookings.service.js';
@@ -40,7 +41,11 @@ interface AuthedSocket extends Socket {
  */
 export function createIoServer(httpServer: HttpServer): IoServer {
   return new IoServer(httpServer, {
-    cors: { origin: true, credentials: true },
+    // Same allowlist as REST (incl. MINI_APP_URL) — no more reflect-any origin.
+    cors: {
+      origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
+      credentials: true,
+    },
     transports: ['websocket'],
     pingInterval: 25_000,
     pingTimeout: 20_000,

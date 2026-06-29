@@ -17,6 +17,13 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']).default('info'),
   BASE_URL: z.string().url().default('http://localhost:3000'),
+  // Mini App / Web client base URL — used for Telegram deep-link buttons
+  // (e.g. app.popytchik.kg/bookings/<id>/chat). Defaults to BASE_URL in dev.
+  // Empty string (from a copied .env template) is treated as unset.
+  MINI_APP_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().url().optional(),
+  ),
 
   DATABASE_URL: z.string().url(),
   TEST_DATABASE_URL: z.string().url().optional(),
