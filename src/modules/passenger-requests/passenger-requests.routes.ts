@@ -11,7 +11,7 @@ import {
 } from './passenger-requests.schemas.js';
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
-import { requireAuth } from '@/middleware/auth.js';
+import { optionalAuth, requireAuth } from '@/middleware/auth.js';
 
 export function createPassengerRequestsRouter(prisma: PrismaClient, notifier: Notifier): Router {
   const router = Router();
@@ -21,10 +21,12 @@ export function createPassengerRequestsRouter(prisma: PrismaClient, notifier: No
   // GET /passenger-requests — open requests list (public, drivers browse)
   router.get(
     '/',
+    optionalAuth,
     validate({ query: ListRequestsQuery }),
     asyncHandler(async (req, res) => {
       const result = await service.list(
         req.query as unknown as Parameters<typeof service.list>[0],
+        req.user?.id ?? null,
       );
       res.json(result);
     }),
@@ -43,10 +45,30 @@ export function createPassengerRequestsRouter(prisma: PrismaClient, notifier: No
   // GET /passenger-requests/:id — single request
   router.get(
     '/:id',
+    optionalAuth,
     validate({ params: RequestIdParam }),
     asyncHandler(async (req, res) => {
-      const result = await service.getById(req.params.id!);
+      const result = await service.getById(req.params.id!, req.user?.id ?? null);
       res.json(result);
+    }),
+  );
+
+  // Like / unlike a passenger request (any authenticated user).
+  router.post(
+    '/:id/like',
+    requireAuth,
+    validate({ params: RequestIdParam }),
+    asyncHandler(async (req, res) => {
+      res.json(await service.like(req.params.id!, req.user!.id));
+    }),
+  );
+
+  router.delete(
+    '/:id/like',
+    requireAuth,
+    validate({ params: RequestIdParam }),
+    asyncHandler(async (req, res) => {
+      res.json(await service.unlike(req.params.id!, req.user!.id));
     }),
   );
 

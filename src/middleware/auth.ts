@@ -35,6 +35,29 @@ export const requireAuth: RequestHandler = async (req, _res, next) => {
 };
 
 /**
+ * Optional auth — populates req.user when a valid access token is present, but
+ * never blocks. For public routes (trip/request search & detail) that want to
+ * know the viewer (e.g. "liked by me", skip owner self-views) without forcing login.
+ */
+export const optionalAuth: RequestHandler = async (req, _res, next) => {
+  try {
+    const token = extractBearer(req.header('authorization'));
+    if (!token) return next();
+    const decoded = verifyAccessToken(token);
+    const user = await getPrisma().user.findUnique({
+      where: { id: decoded.sub },
+      select: { id: true, phone: true, roles: true, isBlocked: true, deletedAt: true },
+    });
+    if (user && !user.deletedAt && !user.isBlocked) {
+      req.user = { id: user.id, phone: user.phone, roles: user.roles as Role[] };
+    }
+  } catch {
+    // Invalid/expired token on a public route — ignore, proceed anonymously.
+  }
+  next();
+};
+
+/**
  * Admin auth — separate token kind.
  */
 export const requireAdmin: RequestHandler = async (req, _res, next) => {
