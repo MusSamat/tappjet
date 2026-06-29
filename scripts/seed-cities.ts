@@ -30,14 +30,31 @@ interface LocationEntry {
   prompt: string[];
 }
 
-// Cities with region_id <= 2 or Bishkek/Osh cities get higher priority in search results.
-const HIGH_PRIORITY_REGION_IDS = new Set([7, 8]); // Bishkek, Osh
-const MID_PRIORITY_REGION_IDS = new Set([1, 2]);  // Chuy, Issyk-Kul
+// Major intercity hubs surface first in autocomplete/search (TZ §1.4 + popular
+// routes). Keyed by name_ru exactly as it appears in locations.json. The old
+// region-based heuristic boosted whole oblasts (so villages outranked Ош, which
+// itself scored 0) — replaced with an explicit hub list.
+const CITY_PRIORITY: Record<string, number> = {
+  Бишкек: 1000,
+  Ош: 1000,
+  Каракол: 900,
+  Нарын: 900,
+  Талас: 900,
+  Баткен: 900,
+  Токмок: 800,
+  'Кара-Балта': 800,
+  Балыкчы: 800,
+  Кант: 800,
+  'Кара-Суу': 800,
+  Өзгөн: 800,
+  'Чолпон-Ата': 800,
+  'Кызыл-Кия': 800,
+};
 
 function getPriority(entry: LocationEntry): number {
-  if (HIGH_PRIORITY_REGION_IDS.has(entry.region_id)) return 100;
-  if (MID_PRIORITY_REGION_IDS.has(entry.region_id)) return 50;
-  if (entry.type === 'city') return 30;
+  const explicit = CITY_PRIORITY[entry.name_ru];
+  if (explicit !== undefined) return explicit;
+  if (entry.type === 'city') return 100;
   return 0;
 }
 
