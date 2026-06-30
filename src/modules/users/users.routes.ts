@@ -5,6 +5,7 @@ import { RatingsQuery, UpdateMeBody, UserIdParam } from './users.schemas.js';
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
 import { requireAuth } from '@/middleware/auth.js';
+import { sendOtpDailyLimit, sendOtpMinuteLimit } from '@/middleware/rateLimit.js';
 import { uploadMemory } from '@/lib/uploads.js';
 import { webRefreshCookie } from '@/lib/cookies.js';
 import { Errors } from '@/lib/errors.js';
@@ -13,6 +14,7 @@ import {
   AddProviderBody,
   ConfirmPhoneChangeBody,
   RemoveProviderParam,
+  SendOtpBody,
   SetPasswordBody,
   StartPhoneChangeBody,
 } from '@/modules/auth/auth.schemas.js';
@@ -132,6 +134,22 @@ export function createUsersRouter(prisma: PrismaClient, notifier: Notifier): Rou
         req.user!.id,
         req.body as Parameters<typeof auth.startPhoneChange>[1],
       );
+      res.json(result);
+    }),
+  );
+
+  // Send an OTP for a NEW phone straight to the user's Telegram chat (no
+  // deep-link). Used by the add-phone modal so Telegram users never leave the
+  // Mini App. Falls back to the deep-link flow client-side on telegram_dm_unavailable.
+  router.post(
+    '/me/phone/send-otp',
+    requireAuth,
+    sendOtpMinuteLimit,
+    sendOtpDailyLimit,
+    validate({ body: SendOtpBody }),
+    asyncHandler(async (req, res) => {
+      const { phone } = req.body as { phone: string };
+      const result = await auth.sendPhoneOtpToUser(req.user!.id, phone);
       res.json(result);
     }),
   );

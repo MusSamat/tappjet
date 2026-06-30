@@ -171,6 +171,34 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     return { expiresInSec: OTP_TTL_SEC };
   }
 
+  // Send an OTP for `phone` straight to the CURRENT user's Telegram chat — no
+  // deep-link / "Start" step. For phone-less Telegram users adding a number from
+  // inside the Mini App: avoids opening the bot (which closes the Mini App).
+  // Throws reason 'telegram_dm_unavailable' if the bot can't DM the user, so the
+  // client can fall back to the deep-link flow.
+  async function sendPhoneOtpToUser(
+    userId: string,
+    phone: string,
+  ): Promise<{ expiresInSec: number }> {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { telegramId: true },
+    });
+    if (!user?.telegramId) {
+      throw Errors.conflict('Telegram not linked to this account', { reason: 'no_telegram_linked' });
+    }
+    if (!bot) throw Errors.serviceUnavailable('Telegram bot not configured');
+    const code = await createOtpRecord(prisma, phone);
+    const text = `Tappjet: ${code} — код подтверждения. Срок действия: 10 минут.`;
+    try {
+      await bot.api.sendMessage(Number(user.telegramId), text);
+    } catch (err) {
+      logger.warn({ err, userId }, 'direct Telegram OTP failed (bot cannot DM user)');
+      throw Errors.conflict('Cannot deliver via Telegram', { reason: 'telegram_dm_unavailable' });
+    }
+    return { expiresInSec: OTP_TTL_SEC };
+  }
+
   async function initTelegramLink(
     phone: string,
   ): Promise<{ token: string; deepLink: string; expiresInSec: number }> {
@@ -323,5 +351,5 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     return issueFullAuthForUser(prisma, record.userId, 'telegram', deviceInfo);
   }
 
-  return { sendOtp, sendTelegramOtp, initTelegramLink, getTelegramLinkStatus, verifyOtp, initBotLogin, getBotLoginStatus, claimBotLogin };
+  return { sendOtp, sendTelegramOtp, sendPhoneOtpToUser, initTelegramLink, getTelegramLinkStatus, verifyOtp, initBotLogin, getBotLoginStatus, claimBotLogin };
 }
