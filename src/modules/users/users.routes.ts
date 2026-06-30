@@ -10,6 +10,7 @@ import { uploadMemory } from '@/lib/uploads.js';
 import { webRefreshCookie } from '@/lib/cookies.js';
 import { Errors } from '@/lib/errors.js';
 import { createAuthService } from '@/modules/auth/auth.service.js';
+import type { TelegramSender } from '@/modules/auth/auth.otp.js';
 import {
   AddProviderBody,
   ConfirmPhoneChangeBody,
@@ -21,10 +22,15 @@ import {
 import type { Notifier } from '@/lib/notifier.js';
 import type { Provider } from '@/lib/jwt.js';
 
-export function createUsersRouter(prisma: PrismaClient, notifier: Notifier): Router {
+export function createUsersRouter(
+  prisma: PrismaClient,
+  notifier: Notifier,
+  bot: TelegramSender | null = null,
+): Router {
   const router = Router();
   const service = createUsersService(prisma);
-  const auth = createAuthService(prisma, notifier);
+  // Pass the bot so /me/phone/send-otp can DM the OTP directly to Telegram.
+  const auth = createAuthService(prisma, notifier, bot);
 
   // Phone-change re-issues tokens — route the web refresh token into a cookie.
   router.use(webRefreshCookie());
