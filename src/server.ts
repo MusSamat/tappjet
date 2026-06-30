@@ -67,7 +67,7 @@ export function createApp(
   // Versioned API surface.
   const v1 = express.Router();
   v1.use('/auth', createAuthRouter(prisma, notifier, bot));
-  v1.use('/users', createUsersRouter(prisma, notifier));
+  v1.use('/users', createUsersRouter(prisma, notifier, bot));
   v1.use('/cities', createCitiesRouter(prisma));
   v1.use('/drivers', createDriversRouter(prisma));
   v1.use('/trips', createTripsRouter(prisma, notifier));
