@@ -267,25 +267,46 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
           // merge it into the verified phone account: transfer providers + telegramId, then
           // soft-delete the placeholder account so the user ends up with one unified account.
           if (existing.phone.startsWith('+prov:')) {
-            if (existing.telegramId) {
-              await tx.user.update({
-                where: { id: phoneOwner.id },
-                data: { telegramId: existing.telegramId },
-              });
-            }
-            await tx.authProvider.updateMany({
-              where: { userId: existing.id },
-              data: { userId: phoneOwner.id },
-            });
+            const movedTelegramId = existing.telegramId;
+            // Release the placeholder's UNIQUE fields (telegram_id, phone) FIRST.
+            // Otherwise setting them on phoneOwner while `existing` still holds the
+            // same telegram_id collides on the unique index → P2002 → 500.
             const tombstone = `+del:${generateUuid().slice(0, 12)}`;
             await tx.user.update({
               where: { id: existing.id },
-              data: { deletedAt: now, phone: tombstone },
+              data: { deletedAt: now, phone: tombstone, telegramId: null },
             });
             await tx.refreshToken.updateMany({
               where: { userId: existing.id, revokedAt: null },
               data: { revokedAt: now },
             });
+            if (movedTelegramId) {
+              await tx.user.update({
+                where: { id: phoneOwner.id },
+                data: { telegramId: movedTelegramId },
+              });
+            }
+            // Move OAuth/telegram provider links onto the surviving account,
+            // skipping any the target already has (avoids the provider unique index).
+            const existingLinks = await tx.authProvider.findMany({ where: { userId: existing.id } });
+            for (const link of existingLinks) {
+              const clash = await tx.authProvider.findUnique({
+                where: {
+                  provider_providerUserId: {
+                    provider: link.provider,
+                    providerUserId: link.providerUserId,
+                  },
+                },
+              });
+              if (clash && clash.userId !== existing.id) {
+                await tx.authProvider.delete({ where: { id: link.id } });
+              } else {
+                await tx.authProvider.update({
+                  where: { id: link.id },
+                  data: { userId: phoneOwner.id },
+                });
+              }
+            }
             logger.info({ provisionalId: existing.id, targetId: phoneOwner.id }, 'provisional account merged into phone account');
             return tx.user.findUniqueOrThrow({ where: { id: phoneOwner.id } });
           }
@@ -296,6 +317,27 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
         }
         return tx.user.update({ where: { id: existing.id }, data: { phone, phoneVerifiedAt: now } });
       }
+      // If this OTP was delivered via the Telegram link flow, we already know the
+      // user's Telegram chat. Bind it to the account so a later "login via Telegram"
+      // resolves to THIS account instead of silently creating a duplicate.
+      const linkTok = await tx.telegramLinkToken.findFirst({
+        where: { phone, telegramId: { not: null } },
+        orderBy: { createdAt: 'desc' },
+      });
+      let capturedTgId = linkTok?.telegramId ?? null;
+      if (capturedTgId !== null) {
+        // Never collide on the telegram_id user index or the telegram authProvider.
+        const [tgUserOwner, tgProviderOwner] = await Promise.all([
+          tx.user.findFirst({ where: { telegramId: capturedTgId, deletedAt: null } }),
+          tx.authProvider.findUnique({
+            where: {
+              provider_providerUserId: { provider: 'telegram', providerUserId: String(capturedTgId) },
+            },
+          }),
+        ]);
+        if (tgUserOwner || tgProviderOwner) capturedTgId = null;
+      }
+
       let u = await tx.user.findFirst({ where: { phone, deletedAt: null } });
       if (!u) {
         u = await tx.user.create({
@@ -306,16 +348,34 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
             roles: ['passenger'],
             phoneVerifiedAt: now,
             termsAcceptedAt: now,
+            ...(capturedTgId !== null ? { telegramId: capturedTgId } : {}),
           },
         });
-      } else if (!u.phoneVerifiedAt) {
-        u = await tx.user.update({ where: { id: u.id }, data: { phoneVerifiedAt: now } });
+      } else {
+        const needsPhone = !u.phoneVerifiedAt;
+        const needsTg = capturedTgId !== null && u.telegramId === null;
+        if (needsPhone || needsTg) {
+          u = await tx.user.update({
+            where: { id: u.id },
+            data: {
+              ...(needsPhone ? { phoneVerifiedAt: now } : {}),
+              ...(needsTg ? { telegramId: capturedTgId } : {}),
+            },
+          });
+        }
       }
       await tx.authProvider.upsert({
         where: { provider_providerUserId: { provider: 'phone', providerUserId: phone } },
         update: {},
         create: { userId: u.id, provider: 'phone', providerUserId: phone },
       });
+      // When we bound a Telegram chat above, create the matching provider link so
+      // /auth/telegram resolves to THIS account (it looks up by authProvider).
+      if (capturedTgId !== null && u.telegramId === capturedTgId) {
+        await tx.authProvider.create({
+          data: { userId: u.id, provider: 'telegram', providerUserId: String(capturedTgId) },
+        });
+      }
       return u;
     });
 

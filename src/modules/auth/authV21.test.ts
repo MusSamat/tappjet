@@ -339,3 +339,63 @@ describe('Providers link/unlink', () => {
     expect(remaining.map((r) => r.provider)).toEqual(['phone']);
   });
 });
+
+// ─── AUTH-DEDUP: one user, not two (Telegram ↔ phone) ───────────────────
+describe('AUTH-DEDUP — Telegram and phone resolve to a single account', () => {
+  it('adding an already-registered phone merges the Telegram placeholder (no 500)', async () => {
+    const phone = '+996700002001';
+
+    // 1) Pre-existing phone-only account.
+    await seedOtp(phone, '200101');
+    const reg = await request(app).post('/v1/auth/phone/verify').send({ phone, code: '200101' });
+    expect(reg.status).toBe(200);
+    const phoneUserId = reg.body.user.id as string;
+
+    // 2) Separate Telegram login → placeholder (+prov:) account.
+    const tgLogin = await request(app).post('/v1/auth/telegram').send({ initData: tgInitData(2001) });
+    expect(tgLogin.body.kind).toBe('full');
+    const tgToken = tgLogin.body.accessToken as string;
+    const tgUserId = tgLogin.body.user.id as string;
+    expect(tgUserId).not.toBe(phoneUserId);
+
+    // 3) Telegram user adds the SAME phone → merge, must not 500 on the unique index.
+    await seedOtp(phone, '200102');
+    const confirm = await request(app)
+      .patch('/v1/users/me/phone/confirm')
+      .set('Authorization', `Bearer ${tgToken}`)
+      .send({ newPhone: phone, code: '200102' });
+    expect(confirm.status).toBe(200);
+
+    // 4) Unified: phone account owns the telegramId; placeholder soft-deleted.
+    const survivor = await testPrisma.user.findUniqueOrThrow({ where: { id: phoneUserId } });
+    expect(survivor.telegramId).toBe(2001n);
+    expect(survivor.deletedAt).toBeNull();
+    const placeholder = await testPrisma.user.findUniqueOrThrow({ where: { id: tgUserId } });
+    expect(placeholder.deletedAt).not.toBeNull();
+  });
+
+  it('registering via the Telegram link flow binds telegramId so later login finds one account', async () => {
+    const phone = '+996700002002';
+
+    // The bot delivered the code via the link flow → token carries the telegramId.
+    await testPrisma.telegramLinkToken.create({
+      data: {
+        token: 'dedup-tok-2002',
+        phone,
+        telegramId: 2002n,
+        status: 'sent',
+        expiresAt: new Date(Date.now() + 10 * 60_000),
+      },
+    });
+    await seedOtp(phone, '200200');
+    const reg = await request(app).post('/v1/auth/phone/verify').send({ phone, code: '200200' });
+    expect(reg.status).toBe(200);
+
+    const u = await testPrisma.user.findFirstOrThrow({ where: { phone } });
+    expect(u.telegramId).toBe(2002n);
+
+    // A later Telegram login resolves to the SAME account — no duplicate.
+    const tgLogin = await request(app).post('/v1/auth/telegram').send({ initData: tgInitData(2002) });
+    expect(tgLogin.body.user.id).toBe(u.id);
+  });
+});
