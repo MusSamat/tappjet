@@ -53,6 +53,8 @@ const TABLES = [
   'auth_providers',
   'refresh_tokens',
   'otp_codes',
+  'telegram_link_tokens',
+  'telegram_bot_login_tokens',
   'driver_profiles',
   'users',
   'admins',
