@@ -20,7 +20,24 @@ export const REFRESH_COOKIE = {
   path: '/v1/auth',
 } as const;
 
-function baseOptions(): CookieOptions {
+// Dev tunnels (two *.trycloudflare.com hosts) put the web client and the API on
+// different sites — browsers drop SameSite=Lax/Strict cookies there, killing the
+// silent refresh. For a secure cross-site request in dev, fall back to
+// SameSite=None; Secure. Same-site dev (localhost→localhost) and prod unchanged.
+function isCrossSiteSecure(req?: Request): boolean {
+  if (!req?.headers.origin) return false;
+  try {
+    const originHost = new URL(req.headers.origin).hostname;
+    return originHost !== req.hostname && req.protocol === 'https';
+  } catch {
+    return false;
+  }
+}
+
+function baseOptions(req?: Request): CookieOptions {
+  if (!isProd && isCrossSiteSecure(req)) {
+    return { httpOnly: true, secure: true, sameSite: 'none', path: REFRESH_COOKIE.path };
+  }
   return {
     httpOnly: true,
     secure: isProd, // dev runs on http://localhost
@@ -29,15 +46,15 @@ function baseOptions(): CookieOptions {
   };
 }
 
-export function setRefreshCookie(res: Response, name: string, token: string): void {
+export function setRefreshCookie(res: Response, name: string, token: string, req?: Request): void {
   res.cookie(name, token, {
-    ...baseOptions(),
+    ...baseOptions(req),
     maxAge: env.JWT_REFRESH_INACTIVITY_DAYS * 24 * 60 * 60 * 1000,
   });
 }
 
-export function clearRefreshCookie(res: Response, name: string): void {
-  res.clearCookie(name, baseOptions());
+export function clearRefreshCookie(res: Response, name: string, req?: Request): void {
+  res.clearCookie(name, baseOptions(req));
 }
 
 export function readCookie(req: Request, name: string): string | undefined {
@@ -68,7 +85,7 @@ export function webRefreshCookie(): RequestHandler {
       if (body && typeof body === 'object' && 'refreshToken' in (body as object)) {
         const b = body as Record<string, unknown>;
         if (typeof b.refreshToken === 'string' && b.refreshToken) {
-          setRefreshCookie(res, cookieName, b.refreshToken);
+          setRefreshCookie(res, cookieName, b.refreshToken, req);
         }
         const { refreshToken: _omit, ...rest } = b;
         return originalJson(rest);

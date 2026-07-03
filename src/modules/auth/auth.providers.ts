@@ -84,6 +84,29 @@ export function createProvidersMethods(prisma: PrismaClient) {
       return issueFullAuthForUser(prisma, user.id, 'telegram', deviceInfo);
     }
 
+    // Legacy accounts may hold user.telegramId without a matching authProvider
+    // row. Heal the link and log in — creating a fresh user here would collide
+    // on the unique telegram_id index (P2002 → 500) and duplicate the account.
+    const byTelegramId = await prisma.user.findFirst({
+      where: { telegramId: BigInt(tg.id), deletedAt: null },
+    });
+    if (byTelegramId) {
+      if (byTelegramId.isBlocked) throw Errors.forbidden({ reason: 'blocked' });
+      await prisma.authProvider.create({
+        data: {
+          userId: byTelegramId.id,
+          provider: 'telegram',
+          providerUserId: String(tg.id),
+          providerData: {
+            username: tg.username ?? null,
+            first_name: tg.first_name ?? null,
+            last_name: tg.last_name ?? null,
+          } as Prisma.InputJsonValue,
+        },
+      });
+      return issueFullAuthForUser(prisma, byTelegramId.id, 'telegram', deviceInfo);
+    }
+
     const created = await prisma.$transaction(async (tx) => {
       const newUser = await tx.user.create({
         data: {

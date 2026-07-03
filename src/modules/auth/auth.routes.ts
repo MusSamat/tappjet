@@ -169,7 +169,7 @@ export function createAuthRouter(
       const body = req.body as { refreshToken?: string; channel?: string };
       const token = body.refreshToken ?? readCookie(req, REFRESH_COOKIE.user);
       if (token) await service.logout(token);
-      if (body.channel === 'web') clearRefreshCookie(res, REFRESH_COOKIE.user);
+      if (body.channel === 'web') clearRefreshCookie(res, REFRESH_COOKIE.user, req);
       res.status(204).send();
     }),
   );
