@@ -31,7 +31,7 @@ type Persona = {
   phone: string;
   name: string;
   roles: Array<'passenger' | 'driver' | 'both'>;
-  language?: 'ru' | 'ky';
+  language?: 'ru' | 'kg';
   blocked?: string; // reason if blocked
   hasPassword?: boolean;
   telegramId?: bigint;
@@ -40,12 +40,12 @@ type Persona = {
 const PERSONAS: Persona[] = [
   // Passengers
   { phone: `${DEMO_PHONE_PREFIX}0001`, name: 'Айбек Осмонов',    roles: ['passenger'], hasPassword: true },
-  { phone: `${DEMO_PHONE_PREFIX}0002`, name: 'Бегимай Токтосунова', roles: ['passenger'], language: 'ky' },
+  { phone: `${DEMO_PHONE_PREFIX}0002`, name: 'Бегимай Токтосунова', roles: ['passenger'], language: 'kg' },
   { phone: `${DEMO_PHONE_PREFIX}0003`, name: 'Нурдин Абдыраимов', roles: ['passenger'], hasPassword: true },
   { phone: `${DEMO_PHONE_PREFIX}0004`, name: 'Гулнара Садыкова',  roles: ['passenger'] },
   // Verified drivers
   { phone: `${DEMO_PHONE_PREFIX}0005`, name: 'Асан Турсунбеков',  roles: ['driver'], hasPassword: true, telegramId: 100000005n },
-  { phone: `${DEMO_PHONE_PREFIX}0006`, name: 'Эркин Жумабаев',    roles: ['driver'], language: 'ky' },
+  { phone: `${DEMO_PHONE_PREFIX}0006`, name: 'Эркин Жумабаев',    roles: ['driver'], language: 'kg' },
   { phone: `${DEMO_PHONE_PREFIX}0007`, name: 'Мирлан Касымалиев', roles: ['driver'], hasPassword: true },
   // Both (passenger + verified driver)
   { phone: `${DEMO_PHONE_PREFIX}0008`, name: 'Чынара Муратбекова', roles: ['passenger', 'driver'], hasPassword: true, telegramId: 100000008n },
