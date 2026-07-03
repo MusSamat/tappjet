@@ -16,5 +16,12 @@ export const RatingsQuery = z.object({
   cursor: z.string().uuid().optional(),
 });
 
+export const LikesQuery = z.object({
+  type: z.enum(['trip', 'passenger_request']),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: z.string().uuid().optional(),
+});
+
 export type UpdateMeInput = z.infer<typeof UpdateMeBody>;
 export type RatingsQueryInput = z.infer<typeof RatingsQuery>;
+export type LikesQueryInput = z.infer<typeof LikesQuery>;

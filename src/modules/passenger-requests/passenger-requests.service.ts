@@ -29,7 +29,7 @@ export interface PassengerRequestDTO {
 
 const RATING_VISIBLE_AFTER = 3;
 
-function toDTO(
+export function toDTO(
   row: {
     id: string;
     passengerId: string;
@@ -81,7 +81,7 @@ function toDTO(
   };
 }
 
-const passengerSelect = {
+export const passengerSelect = {
   id: true,
   name: true,
   avatarUrl: true,

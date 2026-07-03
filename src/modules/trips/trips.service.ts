@@ -694,7 +694,7 @@ export function createTripsService(
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────
-type TripRow = Prisma.TripGetPayload<{
+export type TripRow = Prisma.TripGetPayload<{
   include: {
     driver: {
       select: {
@@ -718,7 +718,7 @@ type TripRow = Prisma.TripGetPayload<{
   };
 }>;
 
-function toListItem(
+export function toListItem(
   row: TripRow,
   opts: { liked: boolean; isOwner: boolean },
 ): TripListItem {

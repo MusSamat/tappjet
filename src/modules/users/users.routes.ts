@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import type { PrismaClient } from '@prisma/client';
 import { createUsersService } from './users.service.js';
-import { RatingsQuery, UpdateMeBody, UserIdParam } from './users.schemas.js';
+import { createLikesService } from './likes.service.js';
+import { LikesQuery, RatingsQuery, UpdateMeBody, UserIdParam } from './users.schemas.js';
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
 import { requireAuth } from '@/middleware/auth.js';
@@ -29,6 +30,7 @@ export function createUsersRouter(
 ): Router {
   const router = Router();
   const service = createUsersService(prisma);
+  const likes = createLikesService(prisma);
   // Pass the bot so /me/phone/send-otp can DM the OTP directly to Telegram.
   const auth = createAuthService(prisma, notifier, bot);
 
@@ -79,6 +81,21 @@ export function createUsersRouter(
         )
         .setHeader('Content-Type', 'application/json; charset=utf-8')
         .send(JSON.stringify(dump, null, 2));
+    }),
+  );
+
+  // Liked listings («Избранное»). Must be BEFORE /:id.
+  router.get(
+    '/me/likes',
+    requireAuth,
+    validate({ query: LikesQuery }),
+    asyncHandler(async (req, res) => {
+      const { type, limit, cursor } = req.query as unknown as {
+        type: 'trip' | 'passenger_request';
+        limit: number;
+        cursor?: string;
+      };
+      res.json(await likes.listLiked(req.user!.id, type, limit, cursor));
     }),
   );
 
