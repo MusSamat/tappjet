@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { Errors, publicPhone } from '@/lib/errors.js';
+import { toFileUrl } from '@/lib/uploads.js';
 import type { Notifier } from '@/lib/notifier.js';
 import { cursorArgs, sliceAndNext, type CursorPaginationInput } from '@/lib/pagination.js';
 import { writeAdminAction } from './admin.audit.js';
@@ -43,7 +44,14 @@ export interface VerificationDetail {
   userId: string;
   user: { id: string; name: string; phone: string; language: string };
   car: { make: string; model: string; year: number; color: string; plate: string; seats: number };
-  photos: { license: string; carPassport: string; carPhoto: string; selfie: string };
+  photos: {
+    license: string;
+    licenseBack: string | null;
+    carPassport: string;
+    carPassportBack: string | null;
+    carPhoto: string;
+    selfie: string;
+  };
   verificationStatus: string;
   rejectionReason: string | null;
   requestedDocs: string[];
@@ -241,7 +249,9 @@ function toDetail(
     carPlate: string;
     seatsCount: number;
     licensePhotoPath: string;
+    licenseBackPath: string | null;
     carPassportPath: string;
+    carPassportBackPath: string | null;
     carPhotoPath: string;
     selfiePath: string;
     verificationStatus: string;
@@ -269,11 +279,14 @@ function toDetail(
       plate: row.carPlate,
       seats: row.seatsCount,
     },
+    // Raw storage paths are meaningless to the browser — map to URLs.
     photos: {
-      license: row.licensePhotoPath,
-      carPassport: row.carPassportPath,
-      carPhoto: row.carPhotoPath,
-      selfie: row.selfiePath,
+      license: toFileUrl(row.licensePhotoPath) ?? row.licensePhotoPath,
+      licenseBack: toFileUrl(row.licenseBackPath),
+      carPassport: toFileUrl(row.carPassportPath) ?? row.carPassportPath,
+      carPassportBack: toFileUrl(row.carPassportBackPath),
+      carPhoto: toFileUrl(row.carPhotoPath) ?? row.carPhotoPath,
+      selfie: toFileUrl(row.selfiePath) ?? row.selfiePath,
     },
     verificationStatus: row.verificationStatus,
     rejectionReason: row.rejectionReason,

@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { Errors } from '@/lib/errors.js';
+import { toFileUrl } from '@/lib/uploads.js';
 import { cursorArgs, sliceAndNext } from '@/lib/pagination.js';
 import { persistImage, removeImage } from '@/lib/uploads.js';
 import type { Notifier } from '@/lib/notifier.js';
@@ -126,7 +127,8 @@ export function createComplaintsService(
         priority: PRIORITY[r.category] ?? 'P3',
         status: r.status,
         description: r.description,
-        attachments: r.attachments,
+        // Storage paths → absolute URLs (bare paths 404 in the browser).
+      attachments: r.attachments.map((a) => toFileUrl(a) ?? a),
         targetUserId: r.targetUserId,
         targetTripId: r.targetTripId,
         createdAt: r.createdAt,

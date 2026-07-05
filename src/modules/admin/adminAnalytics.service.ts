@@ -10,6 +10,10 @@ export interface KpiCards {
   pendingVerifications: number;
   openComplaints: number;
   avgDriverRating: number | null; // avg users.rating WHERE 'driver' IN roles AND rating_count >= 3
+  dau: number;                    // users seen in the last 24h (last_seen_at)
+  mau: number;                    // users seen in the last 30d
+  cancellationRate7d: number | null; // cancelled / (cancelled + completed) × 100, trips 7d
+  openRequests: number;           // open passenger requests right now
 }
 
 export interface ChartResult {
@@ -41,6 +45,10 @@ export function createAdminAnalyticsService(prisma: PrismaClient): AdminAnalytic
       pendingVerif,
       openComplaints,
       avgDriver,
+      dau,
+      mau,
+      cancelled7d,
+      openRequests,
     ] = await Promise.all([
       prisma.user.count({ where: { deletedAt: null } }),
       prisma.user.count({ where: { deletedAt: null, createdAt: { gte: d7 } } }),
@@ -64,10 +72,18 @@ export function createAdminAnalyticsService(prisma: PrismaClient): AdminAnalytic
           AND 'driver' = ANY(roles)
           AND rating_count >= 3
       `,
+      prisma.user.count({
+        where: { deletedAt: null, lastSeenAt: { gte: new Date(now.getTime() - 24 * 60 * 60_000) } },
+      }),
+      prisma.user.count({ where: { deletedAt: null, lastSeenAt: { gte: d30 } } }),
+      prisma.trip.count({ where: { status: 'cancelled', updatedAt: { gte: d7 } } }),
+      prisma.passengerRequest.count({ where: { status: 'open', departureDate: { gte: now } } }),
     ]);
 
     const totalDecisions = accepted7d + rejected7d;
     const acceptanceRate = totalDecisions === 0 ? null : (accepted7d / totalDecisions) * 100;
+    const tripOutcomes = cancelled7d + completed7d;
+    const cancellationRate = tripOutcomes === 0 ? null : (cancelled7d / tripOutcomes) * 100;
 
     return {
       users: { total: totalUsers, last_7d: users7d, last_30d: users30d },
@@ -77,6 +93,10 @@ export function createAdminAnalyticsService(prisma: PrismaClient): AdminAnalytic
       acceptanceRate7d: acceptanceRate === null ? null : Math.round(acceptanceRate * 100) / 100,
       pendingVerifications: pendingVerif,
       openComplaints,
+      dau,
+      mau,
+      cancellationRate7d: cancellationRate === null ? null : Math.round(cancellationRate * 100) / 100,
+      openRequests,
       avgDriverRating:
         avgDriver[0]?.avg === null || avgDriver[0]?.avg === undefined
           ? null

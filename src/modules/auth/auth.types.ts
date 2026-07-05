@@ -77,6 +77,7 @@ export interface AuthService {
   logoutAll(userId: string): Promise<void>;
   adminLogin(email: string, plainPassword: string, totp?: string): Promise<AdminAuthResult>;
   adminRefresh(token: string): Promise<AdminRefreshResult>;
+  adminChangePassword(adminId: string, currentPassword: string, newPassword: string): Promise<void>;
   setPassword(userId: string, newPassword: string, currentPassword?: string): Promise<void>;
   resetPassword(userId: string, newPassword: string): Promise<void>;
   startPhoneChange(

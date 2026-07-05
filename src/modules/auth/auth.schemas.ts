@@ -114,6 +114,11 @@ export type SendOtpInput = z.infer<typeof SendOtpBody>;
 export type VerifyOtpInput = z.infer<typeof VerifyOtpBody>;
 export type RefreshInput = z.infer<typeof RefreshBody>;
 export type LogoutInput = z.infer<typeof LogoutBody>;
+export const AdminChangePasswordBody = z.object({
+  currentPassword: z.string().min(8).max(200),
+  newPassword: z.string().min(12).max(200),
+});
+
 export type AdminLoginInput = z.infer<typeof AdminLoginBody>;
 export type AdminRefreshInput = z.infer<typeof AdminRefreshBody>;
 export type SetPasswordInput = z.infer<typeof SetPasswordBody>;

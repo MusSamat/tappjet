@@ -4,12 +4,15 @@ import { assertActiveUser } from '@/lib/assertUser.js';
 import type { Notifier } from '@/lib/notifier.js';
 import { cursorArgs, sliceAndNext, type CursorPaginationInput } from '@/lib/pagination.js';
 import { writeAdminAction } from './admin.audit.js';
+import { toFileUrl } from '@/lib/uploads.js';
 
 export interface AdminUsersFilter extends CursorPaginationInput {
   q?: string;
   role?: 'passenger' | 'driver';
   blocked?: 'true' | 'false';
   sort: 'created_desc' | 'created_asc' | 'rating_desc' | 'rating_asc';
+  registered_from?: string;
+  registered_to?: string;
 }
 
 export interface AdminUserListItem {
@@ -17,11 +20,16 @@ export interface AdminUserListItem {
   name: string;
   phone: string;
   roles: string[];
+  language: string;
+  // false = provisional Telegram account without a confirmed phone
+  phoneConfirmed: boolean;
+  avatarUrl: string | null;
   rating: number | null;
   ratingCount: number;
   totalTrips: number | null;
   isBlocked: boolean;
   createdAt: Date;
+  lastSeenAt: Date | null;
   complaintsCount: number;
 }
 
@@ -77,6 +85,12 @@ export function createAdminUsersService(
     if (filter.role) where.roles = { has: filter.role };
     if (filter.blocked === 'true') where.isBlocked = true;
     if (filter.blocked === 'false') where.isBlocked = false;
+    if (filter.registered_from || filter.registered_to) {
+      where.createdAt = {
+        ...(filter.registered_from ? { gte: new Date(filter.registered_from) } : {}),
+        ...(filter.registered_to ? { lte: new Date(filter.registered_to) } : {}),
+      };
+    }
 
     const rows = await prisma.user.findMany({
       where,
@@ -93,11 +107,15 @@ export function createAdminUsersService(
       name: u.name,
       phone: publicPhone(u.phone),
       roles: u.roles,
+      language: u.language,
+      phoneConfirmed: u.phoneVerifiedAt !== null && !u.phone.startsWith('+prov:') && !u.phone.startsWith('+tg:'),
+      avatarUrl: toFileUrl(u.avatarUrl),
       rating: u.ratingCount >= 3 ? Number(u.rating) : null,
       ratingCount: u.ratingCount,
       totalTrips: u.driverProfile?.totalTrips ?? null,
       isBlocked: u.isBlocked,
       createdAt: u.createdAt,
+      lastSeenAt: u.lastSeenAt,
       complaintsCount: u._count.complaintsTargeting,
     }));
 
@@ -125,6 +143,9 @@ export function createAdminUsersService(
       createdAt: u.createdAt,
       complaintsCount: u._count.complaintsTargeting,
       language: u.language,
+      phoneConfirmed: u.phoneVerifiedAt !== null && !u.phone.startsWith('+prov:') && !u.phone.startsWith('+tg:'),
+      avatarUrl: toFileUrl(u.avatarUrl),
+      lastSeenAt: u.lastSeenAt,
       phoneVerifiedAt: u.phoneVerifiedAt,
       telegramId: u.telegramId ? u.telegramId.toString() : null,
       blockedReason: u.blockedReason,

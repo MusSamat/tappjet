@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { createAuthService } from './auth.service.js';
 import type { TelegramSender } from './auth.otp.js';
 import {
+  AdminChangePasswordBody,
   AdminLoginBody,
   AdminRefreshBody,
   AppleLoginBody,
@@ -18,6 +19,7 @@ import {
 } from './auth.schemas.js';
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
+import { requireAdmin } from '@/middleware/auth.js';
 import { requireAuth } from '@/middleware/auth.js';
 import {
   sendOtpDailyLimit,
@@ -280,6 +282,21 @@ export function createAuthRouter(
       };
       const result = await service.adminLogin(email, password, totp);
       res.status(200).json(result);
+    }),
+  );
+
+  // Change-on-first-login (and voluntary) password change for admins.
+  router.post(
+    '/admin/change-password',
+    requireAdmin,
+    validate({ body: AdminChangePasswordBody }),
+    asyncHandler(async (req, res) => {
+      const { currentPassword, newPassword } = req.body as {
+        currentPassword: string;
+        newPassword: string;
+      };
+      await service.adminChangePassword(req.admin!.id, currentPassword, newPassword);
+      res.status(204).send();
     }),
   );
 

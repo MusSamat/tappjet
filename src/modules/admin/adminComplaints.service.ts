@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { Errors } from '@/lib/errors.js';
+import { toFileUrl } from '@/lib/uploads.js';
 import { cursorArgs, sliceAndNext, type CursorPaginationInput } from '@/lib/pagination.js';
 import { writeAdminAction } from './admin.audit.js';
 import { PRIORITY } from '@/modules/complaints/complaints.service.js';
@@ -71,7 +72,8 @@ export function createAdminComplaintsService(prisma: PrismaClient): AdminComplai
       targetUserId: r.targetUserId,
       targetTripId: r.targetTripId,
       description: r.description,
-      attachments: r.attachments,
+      // Storage paths → absolute URLs (bare paths 404 in the browser).
+      attachments: r.attachments.map((a) => toFileUrl(a) ?? a),
       createdAt: r.createdAt,
       resolvedAt: r.resolvedAt,
       resolution: r.resolution,

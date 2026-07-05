@@ -17,7 +17,7 @@ export const RejectBody = z.object({
 
 export const RequestDocsBody = z.object({
   docs: z
-    .array(z.enum(['license', 'car_passport', 'car_photo', 'selfie']))
+    .array(z.enum(['license', 'license_back', 'car_passport', 'car_passport_back', 'car_photo', 'selfie']))
     .min(1, 'at least one document must be requested')
     .max(4),
   note: z.string().trim().max(500).optional(),
@@ -29,6 +29,8 @@ export const UsersQuery = CursorPaginationQuery.extend({
   role: z.enum(['passenger', 'driver']).optional(),
   blocked: z.enum(['true', 'false']).optional(),
   sort: z.enum(['created_desc', 'created_asc', 'rating_desc', 'rating_asc']).default('created_desc'),
+  registered_from: z.string().datetime({ offset: true }).optional(),
+  registered_to: z.string().datetime({ offset: true }).optional(),
 });
 
 export const BlockBody = z.object({

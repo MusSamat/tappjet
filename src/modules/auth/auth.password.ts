@@ -182,5 +182,20 @@ export function createPasswordMethods(
     };
   }
 
-  return { setPassword, resetPassword, startPhoneChange, confirmPhoneChange, adminLogin };
+  async function adminChangePassword(
+    adminId: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    const admin = await prisma.admin.findUnique({ where: { id: adminId } });
+    if (!admin || !admin.isActive) throw Errors.unauthorized({ reason: 'admin_credentials' });
+    const ok = await password.verify(currentPassword, admin.passwordHash);
+    if (!ok) throw Errors.unauthorized({ reason: 'admin_credentials' });
+    await prisma.admin.update({
+      where: { id: adminId },
+      data: { passwordHash: await password.hash(newPassword), mustChangePassword: false },
+    });
+  }
+
+  return { setPassword, resetPassword, startPhoneChange, confirmPhoneChange, adminLogin, adminChangePassword };
 }
