@@ -185,6 +185,8 @@ export const openapiDocument = {
               phoneVerified: { type: 'boolean' },
               telegramLinked: { type: 'boolean' },
               language: { type: 'string', enum: ['ru', 'kg'] },
+              bio: { type: 'string', nullable: true, maxLength: 300 },
+              loyaltyPoints: { type: 'integer' },
               termsAcceptedAt: { type: 'string', format: 'date-time', nullable: true },
               lastSeenAt: { type: 'string', format: 'date-time', nullable: true },
             },

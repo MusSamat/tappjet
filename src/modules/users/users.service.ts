@@ -40,6 +40,7 @@ export interface SelfUser extends PublicUser {
   notificationsEnabled: boolean;
   termsAcceptedAt: Date | null;
   loyaltyPoints: number;
+  bio: string | null;
   lastSeenAt: Date | null;
 }
 
@@ -47,7 +48,7 @@ export interface UsersService {
   getSelf(userId: string): Promise<SelfUser>;
   updateSelf(
     userId: string,
-    patch: { name?: string; language?: 'ru' | 'kg'; termsAccepted?: true },
+    patch: { name?: string; language?: 'ru' | 'kg'; bio?: string; termsAccepted?: true },
   ): Promise<SelfUser>;
   deleteSelf(userId: string): Promise<void>;
   getPublicProfile(userId: string): Promise<PublicUser>;
@@ -110,6 +111,7 @@ export function createUsersService(prisma: PrismaClient): UsersService {
       language: user.language,
       notificationsEnabled: user.notificationsEnabled,
       termsAcceptedAt: user.termsAcceptedAt,
+      bio: user.bio,
       lastSeenAt: user.lastSeenAt,
     };
   }
@@ -121,12 +123,13 @@ export function createUsersService(prisma: PrismaClient): UsersService {
 
   async function updateSelf(
     userId: string,
-    patch: { name?: string; language?: 'ru' | 'kg'; termsAccepted?: true },
+    patch: { name?: string; language?: 'ru' | 'kg'; bio?: string; termsAccepted?: true },
   ): Promise<SelfUser> {
     await findActiveUser(userId);
     const data: Parameters<typeof prisma.user.update>[0]['data'] = {};
     if (patch.name !== undefined) data.name = patch.name;
     if (patch.language !== undefined) data.language = patch.language;
+    if (patch.bio !== undefined) data.bio = patch.bio.length > 0 ? patch.bio : null;
     if (patch.termsAccepted === true) data.termsAcceptedAt = new Date();
     const updated = await prisma.user.update({ where: { id: userId }, data });
     return toSelf(updated);
