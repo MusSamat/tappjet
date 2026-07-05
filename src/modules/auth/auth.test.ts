@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 import type { Express } from 'express';
 import { testPrisma } from '../../../tests/setup.js';
 import { createApp } from '@/server.js';
 import { buildTestInitData } from '@/lib/telegram.js';
+import { handleBotLoginToken, registerFromTelegramContact } from '@/modules/auth/auth.otp.js';
 import { clearSentMessages, getSentMessages } from '@/lib/sms.js';
+import { createUser } from '../../../tests/factories.js';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 
@@ -306,3 +309,58 @@ describe('GET /health', () => {
 
 // Silence unused vi import if no mocks added later
 void vi;
+
+describe('Free Telegram registration via bot request_contact', () => {
+  const fakeBot = { api: { sendMessage: async () => undefined } };
+
+  it('new Telegram → handleBotLoginToken arms the token (need_contact)', async () => {
+    const { token } = await testPrisma.telegramBotLoginToken.create({
+      data: { token: crypto.randomUUID(), expiresAt: new Date(Date.now() + 300_000) },
+    });
+    const outcome = await handleBotLoginToken(testPrisma, fakeBot, token, 424242);
+    expect(outcome).toBe('need_contact');
+    const t = await testPrisma.telegramBotLoginToken.findUnique({ where: { token } });
+    expect(t?.telegramId).toBe(424242n);
+    expect(t?.status).toBe('waiting');
+  });
+
+  it('shared contact creates a verified account and completes the token', async () => {
+    const { token } = await testPrisma.telegramBotLoginToken.create({
+      data: { token: crypto.randomUUID(), expiresAt: new Date(Date.now() + 300_000) },
+    });
+    await handleBotLoginToken(testPrisma, fakeBot, token, 555001);
+    const res = await registerFromTelegramContact(testPrisma, 555001, '996700123123', 'Айбек', 'ky');
+    expect(res).toBe('ok');
+    const u = await testPrisma.user.findFirst({ where: { telegramId: 555001n } });
+    expect(u?.phone).toBe('+996700123123');
+    expect(u?.phoneVerifiedAt).not.toBeNull();
+    expect(u?.language).toBe('kg');
+    const t = await testPrisma.telegramBotLoginToken.findUnique({ where: { token } });
+    expect(t?.status).toBe('done');
+    expect(t?.userId).toBe(u?.id);
+    // browser can now claim a real session
+    const claim = await request(app)
+      .post('/v1/auth/telegram/bot-login/claim')
+      .send({ token, channel: 'web' });
+    expect(claim.status).toBe(200);
+    expect(claim.body.accessToken).toBeTruthy();
+  });
+
+  it('contact with no pending token → no_pending (no account created)', async () => {
+    const res = await registerFromTelegramContact(testPrisma, 999111, '996700000000', 'X', 'ru');
+    expect(res).toBe('no_pending');
+    expect(await testPrisma.user.findFirst({ where: { telegramId: 999111n } })).toBeNull();
+  });
+
+  it('links Telegram to an EXISTING phone account instead of duplicating', async () => {
+    const existing = await createUser(testPrisma, { phone: '+996700222333' });
+    const { token } = await testPrisma.telegramBotLoginToken.create({
+      data: { token: crypto.randomUUID(), expiresAt: new Date(Date.now() + 300_000) },
+    });
+    await handleBotLoginToken(testPrisma, fakeBot, token, 666002);
+    const res = await registerFromTelegramContact(testPrisma, 666002, '996700222333', 'Y', 'ru');
+    expect(res).toBe('ok');
+    const u = await testPrisma.user.findFirst({ where: { telegramId: 666002n } });
+    expect(u?.id).toBe(existing.id); // linked, not a new row
+  });
+});

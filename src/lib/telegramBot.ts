@@ -1,8 +1,12 @@
 import type { PrismaClient } from '@prisma/client';
-import { Bot, type Context, InlineKeyboard } from 'grammy';
+import { Bot, type Context, InlineKeyboard, Keyboard } from 'grammy';
 import { env } from '@/config/env.js';
 import { logger } from '@/lib/logger.js';
-import { handleTelegramLinkToken, handleBotLoginToken } from '@/modules/auth/auth.otp.js';
+import {
+  handleTelegramLinkToken,
+  handleBotLoginToken,
+  registerFromTelegramContact,
+} from '@/modules/auth/auth.otp.js';
 import { createBookingsService } from '@/modules/bookings/bookings.service.js';
 import { AppError } from '@/lib/errors.js';
 import type {
@@ -448,9 +452,22 @@ export async function startTelegramBot(
       return;
     }
     if (payload?.startsWith('bl_') && ctx.from) {
-      await handleBotLoginToken(prisma, bot, payload.slice(3), ctx.from.id).catch(
-        (err: unknown) => logger.warn({ err }, 'handleBotLoginToken failed'),
+      const outcome = await handleBotLoginToken(prisma, bot, payload.slice(3), ctx.from.id).catch(
+        (err: unknown) => {
+          logger.warn({ err }, 'handleBotLoginToken failed');
+          return 'expired' as const;
+        },
       );
+      if (outcome === 'need_contact') {
+        // Free registration: ask the user to share their Telegram-verified
+        // number. The reply keyboard's request_contact button returns a contact
+        // whose user_id is the sharer's own — no OTP, no SMS.
+        const kb = new Keyboard().requestContact('📱 Поделиться номером').oneTime().resized();
+        await ctx.reply(
+          'Один шаг до регистрации в Tappjet 🚗\n\nНажмите кнопку ниже, чтобы поделиться номером телефона — Telegram подтвердит его автоматически.',
+          { reply_markup: kb },
+        );
+      }
       return;
     }
 
@@ -566,6 +583,36 @@ export async function startTelegramBot(
 
   bot.callbackQuery(/^accept_booking_(.+)$/, (ctx) => decide(ctx, 'accept', ctx.match[1]!));
   bot.callbackQuery(/^reject_booking_(.+)$/, (ctx) => decide(ctx, 'reject', ctx.match[1]!));
+
+  // Shared phone from the request_contact button → finish free registration.
+  bot.on('message:contact', async (ctx) => {
+    const c = ctx.message.contact;
+    // Only the user's OWN contact carries user_id === sender; a manually
+    // attached foreign contact is rejected (can't register someone else).
+    if (!ctx.from || c.user_id !== ctx.from.id) {
+      await ctx.reply('Пожалуйста, нажмите именно кнопку «Поделиться номером».');
+      return;
+    }
+    const result = await registerFromTelegramContact(
+      prisma, ctx.from.id, c.phone_number, c.first_name, ctx.from.language_code,
+    ).catch((err: unknown) => {
+      logger.warn({ err }, 'registerFromTelegramContact failed');
+      return 'no_pending' as const;
+    });
+    if (result === 'ok') {
+      await ctx.reply('✅ Готово! Аккаунт создан. Вернитесь в браузер — вы уже вошли.', {
+        reply_markup: { remove_keyboard: true },
+      });
+    } else if (result === 'blocked') {
+      await ctx.reply('Аккаунт заблокирован. Обратитесь в поддержку.', {
+        reply_markup: { remove_keyboard: true },
+      });
+    } else {
+      await ctx.reply('Регистрация не начата или ссылка устарела. Откройте сайт и нажмите «Продолжить через Telegram» заново.', {
+        reply_markup: { remove_keyboard: true },
+      });
+    }
+  });
 
   bot.command('help', (ctx: Context) =>
     ctx.reply(

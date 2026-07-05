@@ -89,34 +89,39 @@ export async function handleTelegramLinkToken(
   );
 }
 
+export type BotStartOutcome =
+  | 'logged_in'      // existing account — token marked done
+  | 'need_contact'   // new Telegram — ask for phone via request_contact
+  | 'expired'
+  | 'already'
+  | 'blocked';
+
 export async function handleBotLoginToken(
   prisma: PrismaClient,
   bot: TelegramSender,
   token: string,
   telegramId: number,
-): Promise<void> {
+): Promise<BotStartOutcome> {
   const record = await prisma.telegramBotLoginToken.findUnique({ where: { token } });
   if (!record || record.expiresAt.getTime() <= Date.now()) {
     await bot.api.sendMessage(telegramId, 'Ссылка устарела. Попробуйте снова.');
-    return;
+    return 'expired';
   }
   if (record.status !== 'waiting') {
     await bot.api.sendMessage(telegramId, 'Вход уже выполнен. Вернитесь в приложение.');
-    return;
+    return 'already';
   }
   const user = await prisma.user.findFirst({
     where: { telegramId: BigInt(telegramId), deletedAt: null },
   });
   if (!user) {
+    // No account yet → free registration: remember which Telegram is completing
+    // THIS token, then the caller asks for the phone via request_contact.
     await prisma.telegramBotLoginToken.update({
       where: { token },
-      data: { status: 'not_found' },
+      data: { telegramId: BigInt(telegramId) },
     });
-    await bot.api.sendMessage(
-      telegramId,
-      'Аккаунт с этим Telegram не найден.\nЗарегистрируйтесь через приложение или войдите по номеру телефона.',
-    );
-    return;
+    return 'need_contact';
   }
   if (user.isBlocked) {
     await prisma.telegramBotLoginToken.update({
@@ -124,13 +129,83 @@ export async function handleBotLoginToken(
       data: { status: 'not_found' },
     });
     await bot.api.sendMessage(telegramId, 'Ваш аккаунт заблокирован. Обратитесь в поддержку.');
-    return;
+    return 'blocked';
   }
   await prisma.telegramBotLoginToken.update({
     where: { token },
     data: { status: 'done', userId: user.id },
   });
   await bot.api.sendMessage(telegramId, '✅ Вы вошли в Tappjet! Вернитесь в приложение.');
+  return 'logged_in';
+}
+
+/**
+ * Free Telegram registration: the user shared their phone via the bot's
+ * request_contact button (Telegram-verified). Create-or-link the account and
+ * complete the waiting bot-login token so the browser can claim a session.
+ * Returns 'ok' | 'no_pending' | 'blocked'.
+ */
+export async function registerFromTelegramContact(
+  prisma: PrismaClient,
+  telegramId: number,
+  phoneRaw: string,
+  firstName: string | undefined,
+  langCode: string | undefined,
+): Promise<'ok' | 'no_pending' | 'blocked'> {
+  const tgId = BigInt(telegramId);
+  const phone = phoneRaw.startsWith('+') ? phoneRaw : `+${phoneRaw}`;
+  const pending = await prisma.telegramBotLoginToken.findFirst({
+    where: { telegramId: tgId, status: 'waiting', expiresAt: { gt: new Date() } },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (!pending) return 'no_pending';
+
+  const now = new Date();
+  const userId = await prisma.$transaction(async (tx) => {
+    // Prefer an account already holding this Telegram, then one holding the
+    // phone (link Telegram to it), else create fresh.
+    let u = await tx.user.findFirst({ where: { telegramId: tgId, deletedAt: null } });
+    if (!u) u = await tx.user.findFirst({ where: { phone, deletedAt: null } });
+    if (u?.isBlocked) return null;
+
+    if (!u) {
+      u = await tx.user.create({
+        data: {
+          phone,
+          name: (firstName ?? 'Новый пользователь').slice(0, 100),
+          language: langCode === 'ky' ? 'kg' : 'ru',
+          roles: ['passenger'],
+          telegramId: tgId,
+          phoneVerifiedAt: now,
+          termsAcceptedAt: now,
+        },
+      });
+    } else {
+      u = await tx.user.update({
+        where: { id: u.id },
+        data: {
+          ...(u.phoneVerifiedAt === null ? { phone, phoneVerifiedAt: now } : {}),
+          ...(u.telegramId === null ? { telegramId: tgId } : {}),
+        },
+      });
+    }
+    await tx.authProvider.upsert({
+      where: { provider_providerUserId: { provider: 'phone', providerUserId: phone } },
+      update: {},
+      create: { userId: u.id, provider: 'phone', providerUserId: phone },
+    });
+    await tx.authProvider.upsert({
+      where: { provider_providerUserId: { provider: 'telegram', providerUserId: String(telegramId) } },
+      update: {},
+      create: { userId: u.id, provider: 'telegram', providerUserId: String(telegramId) },
+    });
+    await tx.telegramBotLoginToken.update({
+      where: { id: pending.id },
+      data: { status: 'done', userId: u.id, telegramId: null },
+    });
+    return u.id;
+  });
+  return userId ? 'ok' : 'blocked';
 }
 
 export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | null = null) {
