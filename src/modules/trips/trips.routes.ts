@@ -14,7 +14,7 @@ import {
 } from './trips.schemas.js';
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
-import { optionalAuth, requireAuth, requireRole } from '@/middleware/auth.js';
+import { optionalAuth, requireAuth, requirePhone, requireRole } from '@/middleware/auth.js';
 import { tripCreateLimit } from '@/middleware/rateLimit.js';
 import { Errors } from '@/lib/errors.js';
 
@@ -39,6 +39,7 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
   router.post(
     '/',
     requireAuth,
+    requirePhone,
     requireRole('driver'),
     tripCreateLimit,
     validate({ body: TripCreateBody, headers: IdempotencyHeader }),

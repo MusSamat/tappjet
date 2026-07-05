@@ -49,10 +49,15 @@ export function createApp(
   app.use(
     cors({
       // Allowlist (incl. MINI_APP_URL) is shared with Socket.IO — see lib/cors.
-      origin: (origin, cb) =>
-        isAllowedOrigin(origin)
-          ? cb(null, true)
-          : cb(new Error(`CORS: origin ${origin} not allowed`)),
+      // Disallowed origin → cb(null, false): cors simply omits the ACAO
+      // headers and the BROWSER blocks the call with a clear CORS message.
+      // cb(new Error(...)) here used to bubble into the error handler as a
+      // misleading 500 on the OPTIONS preflight (e.g. stale tunnel origins).
+      origin: (origin, cb) => {
+        const allowed = isAllowedOrigin(origin);
+        if (!allowed) logger.warn({ origin }, 'CORS: origin rejected');
+        cb(null, allowed);
+      },
       credentials: true,
     }),
   );

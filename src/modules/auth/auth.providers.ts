@@ -63,7 +63,9 @@ export function createProvidersMethods(prisma: PrismaClient) {
   async function loginWithTelegram(initData: string, deviceInfo?: string): Promise<AnyAuthResult> {
     let validated;
     try {
-      validated = validateTelegramInitData(initData, env.TELEGRAM_BOT_TOKEN);
+      // 5-min replay window: a captured initData must not stay valid for the
+      // library default of 24h.
+      validated = validateTelegramInitData(initData, env.TELEGRAM_BOT_TOKEN, { maxAgeSeconds: 300 });
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'invalid';
       throw Errors.unauthorized({ reason: 'telegram_invalid', detail: reason });
@@ -188,7 +190,7 @@ export function createProvidersMethods(prisma: PrismaClient) {
     let providerData: Record<string, unknown> = {};
 
     if (body.provider === 'telegram') {
-      const v = validateTelegramInitData(body.initData, env.TELEGRAM_BOT_TOKEN);
+      const v = validateTelegramInitData(body.initData, env.TELEGRAM_BOT_TOKEN, { maxAgeSeconds: 300 });
       provider = 'telegram';
       providerUserId = String(v.user.id);
       providerData = { username: v.user.username ?? null };

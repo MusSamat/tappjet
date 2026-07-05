@@ -404,10 +404,15 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     if (!record || record.status !== 'done' || !record.userId || record.expiresAt.getTime() <= Date.now()) {
       throw Errors.unauthorized({ reason: 'bot_login_invalid' });
     }
-    await prisma.telegramBotLoginToken.update({
-      where: { token },
+    // Atomic single-use: two concurrent claims both pass the read above; only
+    // the one whose conditional update wins may issue a session.
+    const claimed = await prisma.telegramBotLoginToken.updateMany({
+      where: { token, status: 'done' },
       data: { status: 'used', expiresAt: new Date(0) },
     });
+    if (claimed.count !== 1) {
+      throw Errors.unauthorized({ reason: 'bot_login_invalid' });
+    }
     return issueFullAuthForUser(prisma, record.userId, 'telegram', deviceInfo);
   }
 

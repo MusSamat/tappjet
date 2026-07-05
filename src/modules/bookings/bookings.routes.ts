@@ -11,7 +11,7 @@ import {
 } from './bookings.schemas.js';
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
-import { requireAuth, requireRole } from '@/middleware/auth.js';
+import { requireAuth, requirePhone, requireRole } from '@/middleware/auth.js';
 import { bookingCreateLimit } from '@/middleware/rateLimit.js';
 import type { Notifier } from '@/lib/notifier.js';
 
@@ -22,6 +22,7 @@ export function createBookingsRouter(prisma: PrismaClient, notifier: Notifier): 
   router.post(
     '/',
     requireAuth,
+    requirePhone,
     bookingCreateLimit,
     validate({ body: BookingCreateBody }),
     asyncHandler(async (req, res) => {
