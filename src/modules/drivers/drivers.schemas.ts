@@ -4,7 +4,7 @@ const CURRENT_YEAR = new Date().getUTCFullYear();
 
 /**
  * Car data fields — submitted as text parts of the multipart upload alongside
- * the four photo files (license, car_passport, car_photo, selfie).
+ * the six photo files (license front/back, car_passport front/back, car_photo, selfie).
  * TZ §9.1 step 1 + §5.3 CHECK constraints.
  */
 export const DriverVerificationBody = z.object({
@@ -16,13 +16,23 @@ export const DriverVerificationBody = z.object({
     .min(1980, 'car must be from 1980 or newer')
     .max(CURRENT_YEAR + 1, `car_year cannot exceed ${CURRENT_YEAR + 1}`),
   carColor: z.string().trim().min(1).max(30),
-  // Kyrgyz plate formats vary — uppercase letters + digits, 4–15 chars.
+  // KG plate standard (2016+): <region 01–10> "KG" <3 digits> <3 latin letters>,
+  // e.g. 01KG003ADD. Lowercase/spaces are normalized here, format is strict.
   carPlate: z
     .string()
     .trim()
-    .min(4)
-    .max(15)
-    .regex(/^[A-Z0-9\-\s]+$/, 'car_plate must be uppercase letters/digits/dashes'),
+    .transform((v) => v.toUpperCase().replace(/[\s-]/g, ''))
+    .pipe(
+      z
+        .string()
+        // Standard 2016+ plate, or a manual/legacy entry (uppercase alnum,
+        // 4–10 chars) — the wizard's «ввести вручную» escape hatch for cars
+        // still carrying old-format plates.
+        .regex(
+          /^(?:(?:0[1-9]|10)KG\d{3}[A-Z]{3}|[A-Z0-9]{4,10})$/,
+          'car_plate must be 01KG123ABC or a legacy uppercase plate',
+        ),
+    ),
   seatsCount: z.coerce.number().int().min(1).max(7),
 });
 
@@ -33,5 +43,5 @@ export type DriverVerificationInput = z.infer<typeof DriverVerificationBody>;
  * admin's request-list. Keyed by category which must match what admin asked.
  */
 export const DriverReuploadQuery = z.object({
-  category: z.enum(['license', 'car_passport', 'car_photo', 'selfie']),
+  category: z.enum(['license', 'license_back', 'car_passport', 'car_passport_back', 'car_photo', 'selfie']),
 });

@@ -8,7 +8,7 @@ import { requireAuth, requireRole } from '@/middleware/auth.js';
 import { uploadMemory } from '@/lib/uploads.js';
 import { Errors } from '@/lib/errors.js';
 
-const REQUIRED_PHOTO_FIELDS = ['license', 'car_passport', 'car_photo', 'selfie'] as const;
+const REQUIRED_PHOTO_FIELDS = ['license', 'license_back', 'car_passport', 'car_passport_back', 'car_photo', 'selfie'] as const;
 
 export function createDriversRouter(prisma: PrismaClient): Router {
   const router = Router();
@@ -20,7 +20,9 @@ export function createDriversRouter(prisma: PrismaClient): Router {
     requireAuth,
     uploadMemory.fields([
       { name: 'license', maxCount: 1 },
+      { name: 'license_back', maxCount: 1 },
       { name: 'car_passport', maxCount: 1 },
+      { name: 'car_passport_back', maxCount: 1 },
       { name: 'car_photo', maxCount: 1 },
       { name: 'selfie', maxCount: 1 },
     ]),

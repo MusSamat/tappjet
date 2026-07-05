@@ -76,6 +76,14 @@ function toAppError(err: unknown): AppError {
   if (err instanceof SyntaxError && 'body' in (err as object)) {
     return Errors.validation({ reason: 'malformed_json' });
   }
+  // Multer limits (file too big, too many files) — a client error, not a 500.
+  if (err instanceof Error && err.name === 'MulterError') {
+    const code = (err as { code?: string }).code;
+    return Errors.validation({
+      reason: code === 'LIMIT_FILE_SIZE' ? 'file_too_large' : 'upload_rejected',
+      multer_code: code ?? null,
+    });
+  }
   if (err instanceof Error) {
     return new AppError('INTERNAL_ERROR', isProd ? 'Internal server error' : err.message);
   }

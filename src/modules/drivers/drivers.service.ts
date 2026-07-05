@@ -1,5 +1,5 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
-import { Errors } from '@/lib/errors.js';
+import { AppError, Errors } from '@/lib/errors.js';
 import { assertMinDimensions, persistImage, removeImage, toFileUrl } from '@/lib/uploads.js';
 import type { DriverVerificationInput } from './drivers.schemas.js';
 
@@ -18,19 +18,29 @@ const DOC_MIN_HEIGHT = 600;
  *   suspended|blocked — reserved for ops actions (TZ §17)
  */
 
-export type PhotoCategory = 'license' | 'car_passport' | 'car_photo' | 'selfie';
+export type PhotoCategory =
+  | 'license'
+  | 'license_back'
+  | 'car_passport'
+  | 'car_passport_back'
+  | 'car_photo'
+  | 'selfie';
 
 // Mapping between our input categories and the driver_profiles columns.
 const CATEGORY_COLUMN: Record<PhotoCategory, keyof Prisma.DriverProfileUpdateInput> = {
   license: 'licensePhotoPath',
+  license_back: 'licenseBackPath',
   car_passport: 'carPassportPath',
+  car_passport_back: 'carPassportBackPath',
   car_photo: 'carPhotoPath',
   selfie: 'selfiePath',
 };
 
 export interface SubmissionFiles {
   license: Express.Multer.File;
+  license_back: Express.Multer.File;
   car_passport: Express.Multer.File;
+  car_passport_back: Express.Multer.File;
   car_photo: Express.Multer.File;
   selfie: Express.Multer.File;
 }
@@ -82,18 +92,29 @@ export function createDriverService(prisma: PrismaClient): DriverService {
   ): Promise<{ status: string }> {
     // Validate all four document dimensions BEFORE any disk write — a failure
     // here must not leave orphaned blobs behind (TZ §9.1 min 800×600).
-    assertMinDimensions(files.license, DOC_MIN_WIDTH, DOC_MIN_HEIGHT);
-    assertMinDimensions(files.car_passport, DOC_MIN_WIDTH, DOC_MIN_HEIGHT);
-    assertMinDimensions(files.car_photo, DOC_MIN_WIDTH, DOC_MIN_HEIGHT);
-    assertMinDimensions(files.selfie, DOC_MIN_WIDTH, DOC_MIN_HEIGHT);
+    // Each check is attributed: the client shows WHICH photo failed and
+    // jumps straight to that wizard step.
+    for (const key of ['license', 'license_back', 'car_passport', 'car_passport_back', 'car_photo', 'selfie'] as const) {
+      try {
+        assertMinDimensions(files[key], DOC_MIN_WIDTH, DOC_MIN_HEIGHT);
+      } catch (e) {
+        if (e instanceof AppError && e.details && typeof e.details === 'object') {
+          throw new AppError(e.code, e.message, { ...e.details, field: key });
+        }
+        throw e;
+      }
+    }
 
     // Persist the four images first so we have their paths for the DB row.
-    const [license, carPassport, carPhoto, selfie] = await Promise.all([
-      persistImage(files.license, 'driver_license'),
-      persistImage(files.car_passport, 'car_passport'),
-      persistImage(files.car_photo, 'car_photo'),
-      persistImage(files.selfie, 'selfie'),
-    ]);
+    const [license, licenseBack, carPassport, carPassportBack, carPhoto, selfie] =
+      await Promise.all([
+        persistImage(files.license, 'driver_license'),
+        persistImage(files.license_back, 'driver_license'),
+        persistImage(files.car_passport, 'car_passport'),
+        persistImage(files.car_passport_back, 'car_passport'),
+        persistImage(files.car_photo, 'car_photo'),
+        persistImage(files.selfie, 'selfie'),
+      ]);
 
     // Old photo paths to clean up after a successful resubmission commit.
     let oldPhotoPaths: Array<string | null> = [];
@@ -126,7 +147,9 @@ export function createDriverService(prisma: PrismaClient): DriverService {
         const now = new Date();
         const photoPaths = {
           licensePhotoPath: license.path,
+          licenseBackPath: licenseBack.path,
           carPassportPath: carPassport.path,
+          carPassportBackPath: carPassportBack.path,
           carPhotoPath: carPhoto.path,
           selfiePath: selfie.path,
         };
@@ -136,7 +159,9 @@ export function createDriverService(prisma: PrismaClient): DriverService {
           // blobs to remove after commit so disk doesn't leak.
           oldPhotoPaths = [
             existing.licensePhotoPath,
+            existing.licenseBackPath,
             existing.carPassportPath,
+            existing.carPassportBackPath,
             existing.carPhotoPath,
             existing.selfiePath,
           ];
@@ -179,7 +204,9 @@ export function createDriverService(prisma: PrismaClient): DriverService {
       // Roll back the freshly-written blobs if the transaction failed.
       await Promise.all([
         removeImage(license.path),
+        removeImage(licenseBack.path),
         removeImage(carPassport.path),
+        removeImage(carPassportBack.path),
         removeImage(carPhoto.path),
         removeImage(selfie.path),
       ]);

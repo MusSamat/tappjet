@@ -25,10 +25,12 @@ async function submit(
     .field('carModel', 'Camry')
     .field('carYear', overrides.carYear ?? '2015')
     .field('carColor', 'Белый')
-    .field('carPlate', overrides.carPlate ?? 'B1234AB')
+    .field('carPlate', overrides.carPlate ?? '01KG123ABC')
     .field('seatsCount', overrides.seatsCount ?? '4')
     .attach('license', jpegBuffer(), { filename: 'l.jpg', contentType: 'image/jpeg' })
+    .attach('license_back', jpegBuffer(), { filename: 'lb.jpg', contentType: 'image/jpeg' })
     .attach('car_passport', jpegBuffer(), { filename: 'p.jpg', contentType: 'image/jpeg' })
+    .attach('car_passport_back', jpegBuffer(), { filename: 'pb.jpg', contentType: 'image/jpeg' })
     .attach('car_photo', jpegBuffer(), { filename: 'c.jpg', contentType: 'image/jpeg' })
     .attach('selfie', jpegBuffer(), { filename: 's.jpg', contentType: 'image/jpeg' });
 }
@@ -56,10 +58,12 @@ describe('POST /v1/drivers/verification', () => {
       .field('carModel', 'Camry')
       .field('carYear', '2015')
       .field('carColor', 'Белый')
-      .field('carPlate', 'SMALL123')
+      .field('carPlate', '02KG222BBB')
       .field('seatsCount', '4')
       .attach('license', smallJpegBuffer(), { filename: 'l.jpg', contentType: 'image/jpeg' })
+      .attach('license_back', jpegBuffer(), { filename: 'lb.jpg', contentType: 'image/jpeg' })
       .attach('car_passport', jpegBuffer(), { filename: 'p.jpg', contentType: 'image/jpeg' })
+      .attach('car_passport_back', jpegBuffer(), { filename: 'pb.jpg', contentType: 'image/jpeg' })
       .attach('car_photo', jpegBuffer(), { filename: 'c.jpg', contentType: 'image/jpeg' })
       .attach('selfie', jpegBuffer(), { filename: 's.jpg', contentType: 'image/jpeg' });
     expect(res.status).toBe(400);
@@ -68,12 +72,27 @@ describe('POST /v1/drivers/verification', () => {
     expect(await testPrisma.driverProfile.findUnique({ where: { userId: u.id } })).toBeNull();
   });
 
+  it('accepts legacy plates, rejects garbage, normalizes lowercase new-format', async () => {
+    // legacy plate = manual-entry escape hatch, still valid
+    const a = await createUser(testPrisma);
+    const legacy = await submit(a.accessToken, { carPlate: 'B1234AB' });
+    expect(legacy.status).toBe(201);
+    const c = await createUser(testPrisma);
+    const bad = await submit(c.accessToken, { carPlate: 'A!1' });
+    expect(bad.status).toBe(400);
+    const b = await createUser(testPrisma);
+    const ok = await submit(b.accessToken, { carPlate: '08kg 123 abc' });
+    expect(ok.status).toBe(201);
+    const dp = await testPrisma.driverProfile.findFirst({ where: { userId: b.id } });
+    expect(dp?.carPlate).toBe('08KG123ABC');
+  });
+
   it('rejects duplicate plate from another user', async () => {
     const a = await createUser(testPrisma);
     const b = await createUser(testPrisma);
-    const first = await submit(a.accessToken, { carPlate: 'DUPE1234' });
+    const first = await submit(a.accessToken, { carPlate: '03KG333CCC' });
     expect(first.status).toBe(201);
-    const second = await submit(b.accessToken, { carPlate: 'DUPE1234' });
+    const second = await submit(b.accessToken, { carPlate: '03KG333CCC' });
     expect(second.status).toBe(409);
     expect(second.body.error.details.reason).toBe('plate_taken');
   });
@@ -99,10 +118,12 @@ describe('POST /v1/drivers/verification', () => {
       .field('carModel', 'Civic')
       .field('carYear', '2018')
       .field('carColor', 'Чёрный')
-      .field('carPlate', 'C4444AA')
+      .field('carPlate', '04KG444DDD')
       .field('seatsCount', '4')
       .attach('license', jpegBuffer(), { filename: 'l.jpg', contentType: 'image/jpeg' })
+      .attach('license_back', jpegBuffer(), { filename: 'lb.jpg', contentType: 'image/jpeg' })
       .attach('car_passport', jpegBuffer(), { filename: 'p.jpg', contentType: 'image/jpeg' })
+      .attach('car_passport_back', jpegBuffer(), { filename: 'pb.jpg', contentType: 'image/jpeg' })
       .attach('selfie', jpegBuffer(), { filename: 's.jpg', contentType: 'image/jpeg' });
     expect(res.status).toBe(400);
     expect(res.body.error.details.field).toBe('car_photo');
@@ -122,19 +143,19 @@ describe('GET /v1/drivers/verification/status', () => {
 
   it('returns full profile after submission', async () => {
     const u = await createUser(testPrisma);
-    await submit(u.accessToken, { carPlate: 'ST1234' });
+    await submit(u.accessToken, { carPlate: '05KG555EEE' });
     const res = await request(app)
       .get('/v1/drivers/verification/status')
       .set('Authorization', `Bearer ${u.accessToken}`);
     expect(res.body.status).toBe('pending');
-    expect(res.body.car.plate).toBe('ST1234');
+    expect(res.body.car.plate).toBe('05KG555EEE');
   });
 });
 
 describe('POST /v1/drivers/verification/upload (after docs_requested)', () => {
   it('allows re-upload only for requested categories; flips status when list empties', async () => {
     const u = await createUser(testPrisma);
-    await submit(u.accessToken, { carPlate: 'RE1234' });
+    await submit(u.accessToken, { carPlate: '06KG666FFF' });
 
     // Simulate admin flipping to docs_requested
     await testPrisma.driverProfile.update({
@@ -187,7 +208,7 @@ describe('GET /v1/drivers/me/stats', () => {
 
   it('returns totals for verified driver', async () => {
     const u = await createUser(testPrisma, { roles: ['passenger', 'driver'] });
-    await submit(u.accessToken, { carPlate: 'ST0001' });
+    await submit(u.accessToken, { carPlate: '07KG777GGG' });
     await testPrisma.driverProfile.update({
       where: { userId: u.id },
       data: { verificationStatus: 'verified', totalTrips: 12, cancellations30d: 1 },

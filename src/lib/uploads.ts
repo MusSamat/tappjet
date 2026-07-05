@@ -112,7 +112,11 @@ export function assertMinDimensions(
   if (!dims) {
     throw Errors.validation({ reason: 'unreadable_image_dimensions' });
   }
-  if (dims.width < minWidth || dims.height < minHeight) {
+  // Orientation-agnostic: an 800×600 requirement must accept a 600×800
+  // portrait shot — compare the sorted dimensions, not width/height literally.
+  const [dimMin, dimMax] = [Math.min(dims.width, dims.height), Math.max(dims.width, dims.height)];
+  const [reqMin, reqMax] = [Math.min(minWidth, minHeight), Math.max(minWidth, minHeight)];
+  if (dimMax < reqMax || dimMin < reqMin) {
     throw Errors.validation({
       reason: 'image_too_small',
       width: dims.width,

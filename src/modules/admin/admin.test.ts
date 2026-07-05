@@ -21,6 +21,8 @@ async function submitDriverVerification(accessToken: string, plate: string) {
     .field('carPlate', plate)
     .field('seatsCount', '4')
     .attach('license', jpegBuffer(), { filename: 'l.jpg', contentType: 'image/jpeg' })
+    .attach('license_back', jpegBuffer(), { filename: 'lb.jpg', contentType: 'image/jpeg' })
+    .attach('car_passport_back', jpegBuffer(), { filename: 'pb.jpg', contentType: 'image/jpeg' })
     .attach('car_passport', jpegBuffer(), { filename: 'p.jpg', contentType: 'image/jpeg' })
     .attach('car_photo', jpegBuffer(), { filename: 'c.jpg', contentType: 'image/jpeg' })
     .attach('selfie', jpegBuffer(), { filename: 's.jpg', contentType: 'image/jpeg' });
