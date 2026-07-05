@@ -57,6 +57,8 @@ export interface TripListItem {
 
 export interface TripDetail extends TripListItem {
   comment: string | null;
+  // The viewer's own active booking on this trip (guards double-booking in UI).
+  myBooking: { id: string; status: string } | null;
   preferences: Record<string, boolean>;
   waypoints: Array<{ city: string; address?: string }>;
   recentRatings: Array<{
@@ -423,7 +425,7 @@ export function createTripsService(
     });
     if (!row) throw Errors.notFound('Trip');
 
-    const [recentRatings, liked] = await Promise.all([
+    const [recentRatings, liked, myBookingRow] = await Promise.all([
       prisma.rating.findMany({
         where: { rateeId: row.driverId },
         orderBy: { createdAt: 'desc' },
@@ -431,6 +433,12 @@ export function createTripsService(
         include: { rater: { select: { name: true, deletedAt: true } } },
       }),
       engagement.isLiked('trip', id, viewerId),
+      viewerId
+        ? prisma.booking.findFirst({
+            where: { tripId: id, passengerId: viewerId, status: { in: ['pending', 'viewed', 'accepted'] } },
+            select: { id: true, status: true },
+          })
+        : Promise.resolve(null),
     ]);
 
     // Views are counted via an explicit client POST /trips/:id/view, not here —
@@ -439,6 +447,7 @@ export function createTripsService(
     return {
       ...toListItem(row, { liked, isOwner: viewerId !== null && row.driverId === viewerId }),
       comment: row.comment,
+      myBooking: myBookingRow,
       preferences: (row.preferences ?? {}) as Record<string, boolean>,
       waypoints: (row.waypoints as Array<{ city: string; address?: string }>) ?? [],
       recentRatings: recentRatings.map((r) => ({

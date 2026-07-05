@@ -290,6 +290,11 @@ export const openapiDocument = {
             type: 'object',
             properties: {
               comment: { type: 'string', nullable: true },
+              myBooking: {
+                type: 'object',
+                nullable: true,
+                properties: { id: { type: 'string' }, status: { type: 'string' } },
+              },
               preferences: { type: 'object', additionalProperties: { type: 'boolean' } },
               waypoints: { type: 'array', items: { type: 'object' } },
               recentRatings: { type: 'array', items: { type: 'object' } },

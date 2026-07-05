@@ -8,6 +8,8 @@ import {
   createUser,
   createVerifiedDriver,
   seedLaunchCities,
+  createBooking,
+  createTrip,
 } from '../../../tests/factories.js';
 
 let app: Express;
@@ -846,5 +848,29 @@ describe('GET /v1/trips nearby fallback (sub-cities of the same raion)', () => {
     expect(res.status).toBe(200);
     expect(res.body.nearby).toBeUndefined();
     expect(res.body.data).toHaveLength(1);
+  });
+});
+
+describe('GET /v1/trips/:id — myBooking guard', () => {
+  it('exposes the viewer’s active booking on the trip', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: '11KG111MBK' });
+    const trip = await createTrip(testPrisma, d.id);
+    const passenger = await createUser(testPrisma);
+    await createBooking(testPrisma, passenger.id, trip.id, { status: 'pending' });
+    const res = await request(app)
+      .get(`/v1/trips/${trip.id}`)
+      .set('Authorization', `Bearer ${passenger.accessToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.myBooking).not.toBeNull();
+    expect(res.body.myBooking.status).toBe('pending');
+  });
+  it('myBooking is null for a passenger without a booking', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: '12KG222MBK' });
+    const trip = await createTrip(testPrisma, d.id);
+    const other = await createUser(testPrisma);
+    const res = await request(app)
+      .get(`/v1/trips/${trip.id}`)
+      .set('Authorization', `Bearer ${other.accessToken}`);
+    expect(res.body.myBooking).toBeNull();
   });
 });
