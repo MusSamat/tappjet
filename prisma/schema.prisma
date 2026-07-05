@@ -26,6 +26,7 @@ model User {
   phoneVerifiedAt  DateTime? @map("phone_verified_at") @db.Timestamptz(6)
   name             String    @db.VarChar(100)
   avatarUrl        String?   @map("avatar_url") @db.VarChar(500)
+  bio              String?   @db.VarChar(300)
   roles            String[]  @default(["passenger"])
   rating           Decimal   @default(0.00) @db.Decimal(3, 2)
   ratingCount      Int       @default(0) @map("rating_count")
@@ -75,8 +76,12 @@ model DriverProfile {
   carColor           String    @map("car_color") @db.VarChar(30)
   carPlate           String    @unique @map("car_plate") @db.VarChar(15)
   seatsCount         Int       @map("seats_count") @db.SmallInt
+  // Existing columns keep their names and hold the FRONT side; the two
+  // *_back columns were added later (nullable — legacy pre-2-side profiles).
   licensePhotoPath   String    @map("license_photo_path") @db.VarChar(500)
+  licenseBackPath    String?   @map("license_back_path") @db.VarChar(500)
   carPassportPath    String    @map("car_passport_path") @db.VarChar(500)
+  carPassportBackPath String?  @map("car_passport_back_path") @db.VarChar(500)
   carPhotoPath       String    @map("car_photo_path") @db.VarChar(500)
   selfiePath         String    @map("selfie_path") @db.VarChar(500)
   verificationStatus String    @default("pending") @map("verification_status") @db.VarChar(20)
@@ -238,6 +243,10 @@ model Notification {
 
   @@index([userId])
   @@index([delivered])
+  // List query: WHERE user_id ORDER BY created_at DESC (cursor pagination).
+  @@index([userId, createdAt(sort: Desc)])
+  // Unread badge: WHERE user_id AND read_at IS NULL.
+  @@index([userId, readAt])
   @@map("notifications")
 }
 
@@ -323,28 +332,43 @@ model AuthProvider {
   @@map("auth_providers")
 }
 
-// ─── Cities (KG directory) ────────────────────────────────────────────
+// ─── Cities / administrative divisions (KG directory) ─────────────────
+// B-hybrid: a parent_id tree (oblast → raion → aiyl aimak → settlement)
+// PLUS denormalized ancestor names for fast flat search & disambiguation.
+// `type` doubles as the hierarchy level: oblast | raion | aiyl_aimak |
+// city | town | village | hamlet. Non-leaf admin rows have isSearchable=false
+// so autocomplete only returns real settlements. OSM-sourced rows carry osmId.
 model City {
-  id              Int      @id
-  nameRu          String   @map("name_ru") @db.VarChar(150)
-  nameKg          String   @map("name_ky") @db.VarChar(150)
-  nameEn          String   @map("name_en") @db.VarChar(150)
+  id              Int      @id @default(autoincrement())
+  osmId           BigInt?  @unique @map("osm_id")
+  osmType         String?  @map("osm_type") @db.VarChar(10)
   type            String   @db.VarChar(20)
-  regionId        Int      @map("region_id")
-  regionNameRu    String   @map("region_name_ru") @db.VarChar(100)
-  regionNameKg    String   @map("region_name_ky") @db.VarChar(100)
+  parentId        Int?     @map("parent_id")
+  parent          City?    @relation("CityTree", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  children        City[]   @relation("CityTree")
+  isSearchable    Boolean  @default(true) @map("is_searchable")
+  nameRu          String   @map("name_ru") @db.VarChar(150)
+  nameKg          String   @map("name_kg") @db.VarChar(150)
+  nameEn          String?  @map("name_en") @db.VarChar(150)
+  regionId        Int?     @map("region_id")
+  regionNameRu    String?  @map("region_name_ru") @db.VarChar(100)
+  regionNameKg    String?  @map("region_name_kg") @db.VarChar(100)
   districtId      Int?     @map("district_id")
   districtNameRu  String?  @map("district_name_ru") @db.VarChar(100)
-  districtNameKg  String?  @map("district_name_ky") @db.VarChar(100)
+  districtNameKg  String?  @map("district_name_kg") @db.VarChar(100)
+  aiylAimakNameRu String?  @map("aiyl_aimak_name_ru") @db.VarChar(100)
+  aiylAimakNameKg String?  @map("aiyl_aimak_name_kg") @db.VarChar(100)
   lat             Float?
   lng             Float?
   prompt          String[]
   priority        Int      @default(0)
   isActive        Boolean  @default(true) @map("is_active")
 
-  @@unique([nameRu])
   @@index([regionId])
   @@index([isActive])
+  @@index([parentId])
+  @@index([type])
+  @@index([isSearchable])
   @@map("cities")
 }
 
