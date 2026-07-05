@@ -4,9 +4,10 @@ import { env } from '@/config/env.js';
 import { Errors } from '@/lib/errors.js';
 import * as password from '@/lib/bcrypt.js';
 import { getSmsProvider } from '@/lib/sms.js';
-import { validateTelegramInitData } from '@/lib/telegram.js';
+import { validateTelegramContactResponse, validateTelegramInitData } from '@/lib/telegram.js';
 import { verifyGoogleIdToken } from '@/lib/oauth/google.js';
 import { verifyAppleIdentityToken } from '@/lib/oauth/apple.js';
+import { issueFullAuthForUser } from './auth.helpers.js';
 import { sha256Hex } from '@/lib/random.js';
 import { signAdminAccessToken, signAdminRefreshToken, refreshTtlSeconds } from '@/lib/jwt.js';
 import { logger } from '@/lib/logger.js';
@@ -143,6 +144,43 @@ export function createPasswordMethods(
     return result;
   }
 
+
+  /**
+   * Telegram requestContact flow: the mini app sends the SIGNED contact
+   * payload; Telegram itself verified the number belongs to this account's
+   * SIM — no OTP needed. We only accept the caller's OWN contact.
+   */
+  async function confirmPhoneFromTelegramContact(
+    userId: string,
+    response: string,
+    deviceInfo?: string,
+  ): Promise<AuthResult> {
+    const user = await assertActiveUser(userId, prisma);
+    let contact;
+    try {
+      contact = validateTelegramContactResponse(response, env.TELEGRAM_BOT_TOKEN, {
+        maxAgeSeconds: 300,
+      });
+    } catch {
+      throw Errors.unauthorized({ reason: 'contact_signature_invalid' });
+    }
+    if (user.telegramId === null || BigInt(contact.user_id) !== user.telegramId) {
+      throw Errors.unauthorized({ reason: 'contact_user_mismatch' });
+    }
+    const phone = contact.phone_number.startsWith('+')
+      ? contact.phone_number
+      : `+${contact.phone_number}`;
+
+    const bound = await otp.bindVerifiedPhone(userId, phone);
+    const result = await issueFullAuthForUser(prisma, bound.id, 'telegram', deviceInfo);
+    // Same session hygiene as the OTP confirm: rotate out all other sessions.
+    await prisma.refreshToken.updateMany({
+      where: { userId: bound.id, revokedAt: null, tokenHash: { not: sha256Hex(result.refreshToken) } },
+      data: { revokedAt: new Date() },
+    });
+    return result;
+  }
+
   async function adminLogin(
     email: string,
     plainPassword: string,
@@ -197,5 +235,5 @@ export function createPasswordMethods(
     });
   }
 
-  return { setPassword, resetPassword, startPhoneChange, confirmPhoneChange, adminLogin, adminChangePassword };
+  return { setPassword, resetPassword, startPhoneChange, confirmPhoneChange, confirmPhoneFromTelegramContact, adminLogin, adminChangePassword };
 }

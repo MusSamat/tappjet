@@ -28,6 +28,11 @@ export const SendOtpBody = z.object({
   phone: KgPhoneSchema,
 });
 
+export const PhoneFromTelegramBody = z.object({
+  // Signed URLSearchParams payload from WebApp.requestContact()
+  response: z.string().min(20).max(4096),
+});
+
 export const CheckPhoneBody = z.object({
   phone: KgPhoneSchema,
 });

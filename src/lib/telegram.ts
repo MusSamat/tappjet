@@ -36,6 +36,75 @@ export interface ValidateOptions {
 
 const DEFAULT_MAX_AGE = 24 * 60 * 60;
 
+
+/** Verifies the WebApp HMAC (secret = HMAC-SHA256("WebAppData", botToken)) and
+ *  auth_date freshness for any Telegram-signed URLSearchParams payload
+ *  (initData, requestContact response, …). Throws on any mismatch. */
+function verifyWebAppSignature(
+  params: URLSearchParams,
+  botToken: string,
+  maxAgeSeconds: number,
+): void {
+  const hash = params.get('hash');
+  if (!hash) throw new Error('payload has no hash');
+  const entries: [string, string][] = [];
+  params.forEach((value, key) => {
+    if (key !== 'hash') entries.push([key, value]);
+  });
+  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const dataCheckString = entries.map(([k, v]) => `${k}=${v}`).join('\n');
+  const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+  const expectedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+  const given = Buffer.from(hash, 'hex');
+  const expected = Buffer.from(expectedHash, 'hex');
+  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+    throw new Error('payload signature mismatch');
+  }
+  const authDateSec = Number(params.get('auth_date'));
+  if (!Number.isFinite(authDateSec) || authDateSec <= 0) {
+    throw new Error('payload auth_date is invalid');
+  }
+  const ageSec = Math.floor(Date.now() / 1000) - authDateSec;
+  if (ageSec > maxAgeSeconds) throw new Error('payload is stale');
+}
+
+export interface TelegramSharedContact {
+  phone_number: string;
+  user_id: number;
+  first_name?: string;
+}
+
+/** Validates the signed `response` string produced by WebApp.requestContact().
+ *  Returns the contact whose phone_number Telegram itself verified — the
+ *  possession proof for binding a phone without any OTP. */
+export function validateTelegramContactResponse(
+  response: string,
+  botToken: string,
+  options: ValidateOptions = {},
+): TelegramSharedContact {
+  if (!botToken) throw new Error('TELEGRAM_BOT_TOKEN is not configured');
+  if (!response) throw new Error('contact response is empty');
+  const params = new URLSearchParams(response);
+  verifyWebAppSignature(params, botToken, options.maxAgeSeconds ?? DEFAULT_MAX_AGE);
+  const contactJson = params.get('contact');
+  if (!contactJson) throw new Error('contact response has no contact');
+  let contact: TelegramSharedContact;
+  try {
+    const parsed: unknown = JSON.parse(contactJson);
+    if (
+      typeof parsed !== 'object' || parsed === null ||
+      typeof (parsed as { phone_number?: unknown }).phone_number !== 'string' ||
+      typeof (parsed as { user_id?: unknown }).user_id !== 'number'
+    ) {
+      throw new Error('bad shape');
+    }
+    contact = parsed as TelegramSharedContact;
+  } catch {
+    throw new Error('contact is not valid JSON');
+  }
+  return contact;
+}
+
 export function validateTelegramInitData(
   initData: string,
   botToken: string,

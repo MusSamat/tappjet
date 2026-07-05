@@ -17,6 +17,7 @@ import {
   ConfirmPhoneChangeBody,
   RemoveProviderParam,
   SendOtpBody,
+  PhoneFromTelegramBody,
   SetPasswordBody,
   StartPhoneChangeBody,
 } from '@/modules/auth/auth.schemas.js';
@@ -172,6 +173,21 @@ export function createUsersRouter(
     asyncHandler(async (req, res) => {
       const { phone } = req.body as { phone: string };
       const result = await auth.sendPhoneAddOtp(req.user!.id, phone);
+      res.json(result);
+    }),
+  );
+
+
+  // Telegram requestContact: signed payload from the mini app — Telegram
+  // already verified the number, so this binds it directly (no OTP).
+  router.post(
+    '/me/phone/from-telegram',
+    requireAuth,
+    validate({ body: PhoneFromTelegramBody }),
+    asyncHandler(async (req, res) => {
+      const { response } = req.body as { response: string };
+      const ua = req.header('user-agent')?.slice(0, 300);
+      const result = await auth.confirmPhoneFromTelegramContact(req.user!.id, response, ua);
       res.json(result);
     }),
   );

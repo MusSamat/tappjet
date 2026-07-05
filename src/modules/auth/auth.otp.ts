@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { Errors, AppError } from '@/lib/errors.js';
 import * as password from '@/lib/bcrypt.js';
 import { generateOtp, generateUuid } from '@/lib/random.js';
@@ -213,46 +213,19 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     return { status: record.status as 'waiting' | 'sent' | 'expired' };
   }
 
-  async function verifyOtp(
+  /**
+   * Tx-scoped core: binds a VERIFIED phone to an authenticated account.
+   * Shared by the OTP confirm path and the Telegram requestContact path —
+   * possession of the number must already be proven by the caller. Handles
+   * the provisional→owner account merge exactly like the OTP flow.
+   */
+  async function bindPhoneInTx(
+    tx: Prisma.TransactionClient,
+    userId: string,
     phone: string,
-    code: string,
-    provisionalUserId: string | null,
-    provider: Provider,
-    deviceInfo?: string,
-  ): Promise<AuthResult> {
-    const now = new Date();
-    const recent = await prisma.otpCode.findFirst({
-      where: { phone },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!recent) throw Errors.otpWrong();
-
-    if (
-      recent.attempts >= OTP_MAX_ATTEMPTS &&
-      now.getTime() - recent.createdAt.getTime() < OTP_BRUTEFORCE_BLOCK_MIN * 60_000
-    ) {
-      throw Errors.otpTooManyAttempts();
-    }
-    if (recent.usedAt) throw Errors.otpWrong();
-    if (recent.expiresAt.getTime() <= now.getTime()) throw Errors.otpExpired();
-
-    const match = await password.verify(code, recent.codeHash);
-    if (!match) {
-      await prisma.otpCode.update({
-        where: { id: recent.id },
-        data: { attempts: { increment: 1 } },
-      });
-      throw Errors.otpWrong();
-    }
-
-    await prisma.otpCode.update({
-      where: { id: recent.id },
-      data: { usedAt: now, attempts: { increment: 1 } },
-    });
-
-    const user = await prisma.$transaction(async (tx) => {
-      if (provisionalUserId) {
-        const existing = await tx.user.findUnique({ where: { id: provisionalUserId } });
+    now: Date,
+  ) {
+        const existing = await tx.user.findUnique({ where: { id: userId } });
         if (!existing || existing.deletedAt) throw Errors.unauthorized({ reason: 'user_gone' });
         const phoneOwner = await tx.user.findFirst({
           where: { phone, deletedAt: null, NOT: { id: existing.id } },
@@ -311,6 +284,53 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
           });
         }
         return tx.user.update({ where: { id: existing.id }, data: { phone, phoneVerifiedAt: now } });
+  }
+
+  /** Standalone wrapper for callers outside an existing transaction. */
+  async function bindVerifiedPhone(userId: string, phone: string) {
+    return prisma.$transaction(async (tx) => bindPhoneInTx(tx, userId, phone, new Date()));
+  }
+
+  async function verifyOtp(
+    phone: string,
+    code: string,
+    provisionalUserId: string | null,
+    provider: Provider,
+    deviceInfo?: string,
+  ): Promise<AuthResult> {
+    const now = new Date();
+    const recent = await prisma.otpCode.findFirst({
+      where: { phone },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!recent) throw Errors.otpWrong();
+
+    if (
+      recent.attempts >= OTP_MAX_ATTEMPTS &&
+      now.getTime() - recent.createdAt.getTime() < OTP_BRUTEFORCE_BLOCK_MIN * 60_000
+    ) {
+      throw Errors.otpTooManyAttempts();
+    }
+    if (recent.usedAt) throw Errors.otpWrong();
+    if (recent.expiresAt.getTime() <= now.getTime()) throw Errors.otpExpired();
+
+    const match = await password.verify(code, recent.codeHash);
+    if (!match) {
+      await prisma.otpCode.update({
+        where: { id: recent.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw Errors.otpWrong();
+    }
+
+    await prisma.otpCode.update({
+      where: { id: recent.id },
+      data: { usedAt: now, attempts: { increment: 1 } },
+    });
+
+    const user = await prisma.$transaction(async (tx) => {
+      if (provisionalUserId) {
+        return bindPhoneInTx(tx, provisionalUserId, phone, now);
       }
       // If this OTP was delivered via the Telegram link flow, we already know the
       // user's Telegram chat. Bind it to the account so a later "login via Telegram"
@@ -411,5 +431,5 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     return issueFullAuthForUser(prisma, record.userId, 'telegram', deviceInfo);
   }
 
-  return { sendOtp, sendTelegramOtp, sendPhoneAddOtp, initTelegramLink, getTelegramLinkStatus, verifyOtp, initBotLogin, getBotLoginStatus, claimBotLogin };
+  return { sendOtp, sendTelegramOtp, sendPhoneAddOtp, bindVerifiedPhone, initTelegramLink, getTelegramLinkStatus, verifyOtp, initBotLogin, getBotLoginStatus, claimBotLogin };
 }
