@@ -275,6 +275,12 @@ export const openapiDocument = {
           status: { type: 'string', enum: ['active', 'completed', 'cancelled'] },
           createdAt: { type: 'string', format: 'date-time' },
           liked: { type: 'boolean', description: 'Whether the requesting viewer liked this listing' },
+          myResponse: {
+            type: 'object',
+            nullable: true,
+            description: 'The viewing driver’s own response to this request, if any',
+            properties: { id: { type: 'string' }, status: { type: 'string' } },
+          },
           metrics: {
             type: 'object',
             nullable: true,
