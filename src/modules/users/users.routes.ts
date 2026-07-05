@@ -31,7 +31,6 @@ export function createUsersRouter(
   const router = Router();
   const service = createUsersService(prisma);
   const likes = createLikesService(prisma);
-  // Pass the bot so /me/phone/send-otp can DM the OTP directly to Telegram.
   const auth = createAuthService(prisma, notifier, bot);
 
   // Phone-change re-issues tokens — route the web refresh token into a cookie.
@@ -161,9 +160,9 @@ export function createUsersRouter(
     }),
   );
 
-  // Send an OTP for a NEW phone straight to the user's Telegram chat (no
-  // deep-link). Used by the add-phone modal so Telegram users never leave the
-  // Mini App. Falls back to the deep-link flow client-side on telegram_dm_unavailable.
+  // Send an OTP that verifies OWNERSHIP of a new phone — always by SMS to
+  // that phone. (Was: DM to the requester's own Telegram, which proved
+  // nothing and enabled claiming/merging accounts behind arbitrary numbers.)
   router.post(
     '/me/phone/send-otp',
     requireAuth,
@@ -172,7 +171,7 @@ export function createUsersRouter(
     validate({ body: SendOtpBody }),
     asyncHandler(async (req, res) => {
       const { phone } = req.body as { phone: string };
-      const result = await auth.sendPhoneOtpToUser(req.user!.id, phone);
+      const result = await auth.sendPhoneAddOtp(req.user!.id, phone);
       res.json(result);
     }),
   );

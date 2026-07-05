@@ -3,6 +3,7 @@ import request from 'supertest';
 import type { Express } from 'express';
 import { testPrisma } from '../../../tests/setup.js';
 import { createApp } from '@/server.js';
+import { clearSentMessages, getSentMessages } from '@/lib/sms.js';
 import { createUser, jpegBuffer } from '../../../tests/factories.js';
 
 let app: Express;
@@ -165,5 +166,20 @@ describe('GET /v1/cities', () => {
     const res = await request(app).get('/v1/cities');
     expect(res.status).toBe(200);
     expect(res.body.data.map((c: { nameRu: string }) => c.nameRu)).toEqual(['Бишкек']);
+  });
+});
+
+describe('POST /v1/users/me/phone/send-otp — SMS-only delivery (possession proof)', () => {
+  it('sends the code to the TARGET phone via SMS, never to the requester Telegram', async () => {
+    clearSentMessages();
+    const u = await createUser(testPrisma, { telegramId: BigInt(777001) });
+    const res = await request(app)
+      .post('/v1/users/me/phone/send-otp')
+      .set('Authorization', `Bearer ${u.accessToken}`)
+      .send({ phone: '+996700999888' });
+    expect(res.status).toBe(200);
+    const sms = getSentMessages();
+    expect(sms).toHaveLength(1);
+    expect(sms[0]!.phone).toBe('+996700999888');
   });
 });

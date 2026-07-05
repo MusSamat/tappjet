@@ -61,7 +61,7 @@ export interface AuthService {
   loginWithPhonePassword(body: import('./auth.schemas.js').PhoneLoginInput, deviceInfo?: string): Promise<AuthResult>;
   sendOtp(phone: string, userIdBinding?: string): Promise<{ expiresInSec: number }>;
   sendTelegramOtp(phone: string): Promise<{ expiresInSec: number }>;
-  sendPhoneOtpToUser(userId: string, phone: string): Promise<{ expiresInSec: number }>;
+  sendPhoneAddOtp(userId: string, phone: string): Promise<{ expiresInSec: number }>;
   initTelegramLink(phone: string): Promise<{ token: string; deepLink: string; expiresInSec: number }>;
   getTelegramLinkStatus(token: string): Promise<{ status: 'waiting' | 'sent' | 'expired' }>;
   checkPhone(phone: string): Promise<{ exists: boolean; hasPassword: boolean; hasTelegram: boolean }>;

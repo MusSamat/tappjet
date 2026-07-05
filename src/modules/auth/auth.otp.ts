@@ -9,6 +9,7 @@ import type { Provider } from '@/lib/jwt.js';
 import type { AuthResult } from './auth.types.js';
 import { issueFullAuthForUser } from './auth.helpers.js';
 import {
+  PHONE_CHANGE_DAILY_CAP,
   OTP_TTL_SEC,
   OTP_MAX_ATTEMPTS,
   OTP_BRUTEFORCE_BLOCK_MIN,
@@ -176,27 +177,21 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
   // inside the Mini App: avoids opening the bot (which closes the Mini App).
   // Throws reason 'telegram_dm_unavailable' if the bot can't DM the user, so the
   // client can fall back to the deep-link flow.
-  async function sendPhoneOtpToUser(
-    userId: string,
+  // OTP that BINDS phone `phone` to the account must be delivered to that
+  // phone (SMS) — delivering it to the requester's own Telegram proved nothing
+  // and let anyone claim (and merge into!) an account behind any number they
+  // typed. Telegram-DM delivery remains only for login codes to the account's
+  // OWN already-verified number (sendTelegramOtp).
+  async function sendPhoneAddOtp(
+    _userId: string,
     phone: string,
   ): Promise<{ expiresInSec: number }> {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { telegramId: true },
-    });
-    if (!user?.telegramId) {
-      throw Errors.conflict('Telegram not linked to this account', { reason: 'no_telegram_linked' });
+    const since = new Date(Date.now() - 24 * 60 * 60_000);
+    const recent = await prisma.otpCode.count({ where: { phone, createdAt: { gte: since } } });
+    if (recent >= PHONE_CHANGE_DAILY_CAP) {
+      throw Errors.rateLimited({ bucket: 'phone_change_day', limit: PHONE_CHANGE_DAILY_CAP });
     }
-    if (!bot) throw Errors.serviceUnavailable('Telegram bot not configured');
-    const code = await createOtpRecord(prisma, phone);
-    const text = `Tappjet: ${code} — код подтверждения. Срок действия: 10 минут.`;
-    try {
-      await bot.api.sendMessage(Number(user.telegramId), text);
-    } catch (err) {
-      logger.warn({ err, userId }, 'direct Telegram OTP failed (bot cannot DM user)');
-      throw Errors.conflict('Cannot deliver via Telegram', { reason: 'telegram_dm_unavailable' });
-    }
-    return { expiresInSec: OTP_TTL_SEC };
+    return sendOtp(phone);
   }
 
   async function initTelegramLink(
@@ -416,5 +411,5 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     return issueFullAuthForUser(prisma, record.userId, 'telegram', deviceInfo);
   }
 
-  return { sendOtp, sendTelegramOtp, sendPhoneOtpToUser, initTelegramLink, getTelegramLinkStatus, verifyOtp, initBotLogin, getBotLoginStatus, claimBotLogin };
+  return { sendOtp, sendTelegramOtp, sendPhoneAddOtp, initTelegramLink, getTelegramLinkStatus, verifyOtp, initBotLogin, getBotLoginStatus, claimBotLogin };
 }
