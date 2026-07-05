@@ -23,7 +23,9 @@ export const ListRequestsQuery = z.object({
   to_city: CityName.optional(),
   date: z.string().datetime({ offset: true }).optional(),
   seats: z.coerce.number().int().min(1).max(8).optional(),
-  cursor: z.string().uuid().optional(),
+  // Plain uuid, or 'nb_'-prefixed uuid when paginating the same-raion
+  // nearby tier (see districtCityNames fallback in the service).
+  cursor: z.string().regex(/^(nb_)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 

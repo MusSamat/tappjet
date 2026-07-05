@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import { Errors } from '@/lib/errors.js';
 import { toFileUrl } from '@/lib/uploads.js';
 import { createEngagementService } from '@/lib/engagement.js';
+import { districtCityNames } from '@/lib/cityArea.js';
 import type { Notifier } from '@/lib/notifier.js';
 import type { CreatePassengerRequestInput, ListRequestsInput, RespondInput } from './passenger-requests.schemas.js';
 
@@ -135,24 +136,55 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
   async function list(
     input: ListRequestsInput,
     viewerId: string | null = null,
-  ): Promise<{ data: PassengerRequestDTO[]; nextCursor: string | null }> {
+  ): Promise<{ data: PassengerRequestDTO[]; nextCursor: string | null; nearby?: boolean }> {
     const take = input.limit + 1;
     const now = new Date();
 
-    const rows = await prisma.passengerRequest.findMany({
-      where: {
-        status: 'open',
-        departureDate: { gte: now },
-        ...(input.from_city ? { originCity: input.from_city } : {}),
-        ...(input.to_city ? { destinationCity: input.to_city } : {}),
-        ...(input.date ? { departureDate: { gte: new Date(input.date) } } : {}),
-        ...(input.seats ? { seatsNeeded: { gte: input.seats } } : {}),
-      },
-      orderBy: [{ departureDate: 'asc' }, { createdAt: 'desc' }],
-      take,
-      ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
-      include: { passenger: { select: passengerSelect } },
-    });
+    // "nb_" cursor prefix = the first page fell back to the same-raion tier
+    // (see trips.service.search) — keep the expanded filter on later pages.
+    let nearby = input.cursor?.startsWith('nb_') ?? false;
+    const cursor = nearby ? input.cursor!.slice(3) : input.cursor;
+
+    const runQuery = (fromNames: string[] | null, toNames: string[] | null) =>
+      prisma.passengerRequest.findMany({
+        where: {
+          status: 'open',
+          departureDate: { gte: now },
+          ...(fromNames ? { originCity: { in: fromNames } } : {}),
+          ...(toNames ? { destinationCity: { in: toNames } } : {}),
+          ...(input.date ? { departureDate: { gte: new Date(input.date) } } : {}),
+          ...(input.seats ? { seatsNeeded: { gte: input.seats } } : {}),
+        },
+        orderBy: [{ departureDate: 'asc' }, { createdAt: 'desc' }],
+        take,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        include: { passenger: { select: passengerSelect } },
+      });
+
+    const expandCities = async (): Promise<[string[] | null, string[] | null]> =>
+      Promise.all([
+        input.from_city ? districtCityNames(prisma, input.from_city) : Promise.resolve(null),
+        input.to_city ? districtCityNames(prisma, input.to_city) : Promise.resolve(null),
+      ]);
+
+    let rows;
+    if (nearby) {
+      rows = await runQuery(...(await expandCities()));
+    } else {
+      rows = await runQuery(
+        input.from_city ? [input.from_city] : null,
+        input.to_city ? [input.to_city] : null,
+      );
+      // Exact cities matched nothing on the first page → widen once to the
+      // same-raion tier ("sub-cities") and mark the response.
+      if (rows.length === 0 && !cursor && (input.from_city || input.to_city)) {
+        const [fromNames, toNames] = await expandCities();
+        if ((fromNames?.length ?? 0) > 1 || (toNames?.length ?? 0) > 1) {
+          nearby = true;
+          rows = await runQuery(fromNames, toNames);
+        }
+      }
+    }
 
     const hasMore = rows.length > input.limit;
     const slice = hasMore ? rows.slice(0, input.limit) : rows;
@@ -164,7 +196,8 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
           isOwner: viewerId !== null && r.passengerId === viewerId,
         }),
       ),
-      nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
+      nextCursor: hasMore ? `${nearby ? 'nb_' : ''}${slice[slice.length - 1]!.id}` : null,
+      ...(nearby ? { nearby: true } : {}),
     };
   }
 

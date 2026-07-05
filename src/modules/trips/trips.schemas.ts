@@ -67,7 +67,9 @@ export const TripSearchQuery = z.object({
     .transform((v) => v === 'true'),
   luggage: z.enum(['yes', 'small', 'no']).optional(),
   sort: z.enum(['time', 'price_asc', 'rating_desc']).default('time'),
-  cursor: z.string().uuid().optional(),
+  // Plain uuid, or 'nb_'-prefixed uuid when paginating the same-raion
+  // nearby tier (see districtCityNames fallback in the service).
+  cursor: z.string().regex(/^(nb_)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 

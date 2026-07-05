@@ -304,9 +304,9 @@ export async function seedLaunchCities(prisma: PrismaClient): Promise<void> {
   ] as const;
   for (const c of cities) {
     await prisma.city.upsert({
-      where: { nameRu: c.nameRu },
+      where: { id: c.id },
       update: {},
-      create: { ...c, isActive: true },
+      create: { ...c, prompt: [...c.prompt], isActive: true },
     });
   }
 }

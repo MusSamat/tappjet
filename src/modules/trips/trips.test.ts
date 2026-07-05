@@ -759,3 +759,92 @@ describe('GET /v1/routes/price-suggestion', () => {
     expect(res.body.sampleSize).toBe(3);
   });
 });
+
+describe('GET /v1/trips nearby fallback (sub-cities of the same raion)', () => {
+  // Two villages of one raion: exact search for one must fall back to the other.
+  async function seedRaionVillages() {
+    await testPrisma.city.createMany({
+      data: [
+        {
+          // Explicit high ids: seedLaunchCities uses fixed low ids without
+          // advancing the autoincrement sequence, so default ids collide.
+          id: 909001,
+          nameRu: 'Тест-Село-А',
+          nameKg: 'Тест-Село-А',
+          type: 'village',
+          districtNameRu: 'Тестовый район',
+          districtNameKg: 'Тест району',
+          regionNameRu: 'Тестовая область',
+          prompt: [],
+          isActive: true,
+        },
+        {
+          id: 909002,
+          nameRu: 'Тест-Село-Б',
+          nameKg: 'Тест-Село-Б',
+          type: 'village',
+          districtNameRu: 'Тестовый район',
+          districtNameKg: 'Тест району',
+          regionNameRu: 'Тестовая область',
+          prompt: [],
+          isActive: true,
+        },
+      ],
+    });
+  }
+
+  it('falls back to same-raion trips when the exact city has none, flags nearby', async () => {
+    await seedRaionVillages();
+    const d = await createVerifiedDriver(testPrisma, { plate: 'NB1' });
+    await testPrisma.trip.create({
+      data: {
+        driverId: d.id,
+        originCity: 'Тест-Село-А',
+        destinationCity: 'Ош',
+        originAddress: 'x',
+        departureAt: new Date(Date.now() + 3 * 60 * 60_000),
+        estimatedDurationMin: 600,
+        seatsTotal: 3,
+        seatsAvailable: 3,
+        pricePerSeat: 900,
+        luggage: 'no',
+        status: 'active',
+      },
+    });
+    const caller = await createUser(testPrisma);
+    const res = await request(app)
+      .get(`/v1/trips?from_city=${encodeURIComponent('Тест-Село-Б')}&to_city=${encodeURIComponent('Ош')}`)
+      .set('Authorization', `Bearer ${caller.accessToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.nearby).toBe(true);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].originCity).toBe('Тест-Село-А');
+  });
+
+  it('does not flag nearby when the exact city matches', async () => {
+    await seedRaionVillages();
+    const d = await createVerifiedDriver(testPrisma, { plate: 'NB2' });
+    await testPrisma.trip.create({
+      data: {
+        driverId: d.id,
+        originCity: 'Тест-Село-Б',
+        destinationCity: 'Ош',
+        originAddress: 'x',
+        departureAt: new Date(Date.now() + 3 * 60 * 60_000),
+        estimatedDurationMin: 600,
+        seatsTotal: 3,
+        seatsAvailable: 3,
+        pricePerSeat: 900,
+        luggage: 'no',
+        status: 'active',
+      },
+    });
+    const caller = await createUser(testPrisma);
+    const res = await request(app)
+      .get(`/v1/trips?from_city=${encodeURIComponent('Тест-Село-Б')}&to_city=${encodeURIComponent('Ош')}`)
+      .set('Authorization', `Bearer ${caller.accessToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.nearby).toBeUndefined();
+    expect(res.body.data).toHaveLength(1);
+  });
+});

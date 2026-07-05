@@ -14,12 +14,14 @@ import { asyncHandler } from '@/middleware/errorHandler.js';
 interface CityRow {
   id: number;
   name_ru: string;
-  name_ky: string;
+  name_kg: string;
   name_en: string;
   region_name_ru: string;
-  region_name_ky: string;
+  region_name_kg: string;
   district_name_ru: string | null;
-  district_name_ky: string | null;
+  district_name_kg: string | null;
+  aiyl_aimak_name_ru: string | null;
+  aiyl_aimak_name_kg: string | null;
   lat: number | null;
   lng: number | null;
 }
@@ -28,12 +30,14 @@ function toDto(r: CityRow) {
   return {
     id: r.id,
     nameRu: r.name_ru,
-    nameKg: r.name_ky,
+    nameKg: r.name_kg,
     nameEn: r.name_en,
     regionNameRu: r.region_name_ru,
-    regionNameKg: r.region_name_ky,
+    regionNameKg: r.region_name_kg,
     districtNameRu: r.district_name_ru ?? null,
-    districtNameKg: r.district_name_ky ?? null,
+    districtNameKg: r.district_name_kg ?? null,
+    aiylAimakNameRu: r.aiyl_aimak_name_ru ?? null,
+    aiylAimakNameKg: r.aiyl_aimak_name_kg ?? null,
     lat: r.lat,
     lng: r.lng,
   };
@@ -100,15 +104,17 @@ export function createCitiesRouter(prisma: PrismaClient): Router {
         // (Prisma's `has` only does exact element match, not substring search).
         const pattern = `%${q}%`;
         const rows = await prisma.$queryRaw<CityRow[]>`
-          SELECT id, name_ru, name_ky, name_en,
-                 region_name_ru, region_name_ky,
-                 district_name_ru, district_name_ky,
+          SELECT id, name_ru, name_kg, name_en,
+                 region_name_ru, region_name_kg,
+                 district_name_ru, district_name_kg,
+                 aiyl_aimak_name_ru, aiyl_aimak_name_kg,
                  lat, lng
           FROM cities
           WHERE is_active = true
+            AND is_searchable = true
             AND (
               name_ru   ILIKE ${pattern}
-              OR name_ky  ILIKE ${pattern}
+              OR name_kg  ILIKE ${pattern}
               OR name_en  ILIKE ${pattern}
               OR EXISTS (
                 SELECT 1 FROM unnest(prompt) AS p
@@ -121,12 +127,14 @@ export function createCitiesRouter(prisma: PrismaClient): Router {
         res.json({ data: rows.map(toDto) });
       } else {
         const rows = await prisma.$queryRaw<CityRow[]>`
-          SELECT id, name_ru, name_ky, name_en,
-                 region_name_ru, region_name_ky,
-                 district_name_ru, district_name_ky,
+          SELECT id, name_ru, name_kg, name_en,
+                 region_name_ru, region_name_kg,
+                 district_name_ru, district_name_kg,
+                 aiyl_aimak_name_ru, aiyl_aimak_name_kg,
                  lat, lng
           FROM cities
           WHERE is_active = true
+            AND is_searchable = true
           ORDER BY priority DESC, name_ru ASC
           LIMIT ${limit}
         `;

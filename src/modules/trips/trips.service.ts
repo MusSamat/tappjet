@@ -3,6 +3,7 @@ import { AppError, Errors } from '@/lib/errors.js';
 import { assertActiveUser } from '@/lib/assertUser.js';
 import { toFileUrl } from '@/lib/uploads.js';
 import { cursorArgs, sliceAndNext } from '@/lib/pagination.js';
+import { districtCityNames } from '@/lib/cityArea.js';
 import { estimateDurationMin } from '@/lib/routes.js';
 import { logger } from '@/lib/logger.js';
 import type { Notifier } from '@/lib/notifier.js';
@@ -77,7 +78,7 @@ export interface TripsService {
   search(
     query: TripSearchInput,
     viewerId?: string | null,
-  ): Promise<{ data: TripListItem[]; nextCursor: string | null }>;
+  ): Promise<{ data: TripListItem[]; nextCursor: string | null; nearby?: boolean }>;
   getById(id: string, viewerId?: string | null): Promise<TripDetail>;
   patch(id: string, driverUserId: string, patch: TripPatchInput): Promise<TripDetail>;
   cancel(id: string, driverUserId: string, reason?: string): Promise<{ status: 'cancelled' }>;
@@ -242,9 +243,17 @@ export function createTripsService(
   async function search(
     query: TripSearchInput,
     viewerId: string | null = null,
-  ): Promise<{ data: TripListItem[]; nextCursor: string | null }> {
+  ): Promise<{ data: TripListItem[]; nextCursor: string | null; nearby?: boolean }> {
     if (query.from_city && query.to_city && query.from_city === query.to_city) {
       throw Errors.validation({ reason: 'cities_must_differ' });
+    }
+    // "nb_" cursor prefix = the first page fell back to the same-raion tier;
+    // later pages must keep that expanded filter (frontend treats the cursor
+    // as opaque, so no client changes are needed for pagination).
+    let nearby = false;
+    if (query.cursor?.startsWith('nb_')) {
+      nearby = true;
+      query = { ...query, cursor: query.cursor.slice(3) };
     }
     if (query.from_city || query.to_city) {
       const cityNames = [query.from_city, query.to_city].filter(Boolean) as string[];
@@ -265,18 +274,36 @@ export function createTripsService(
     // Mirror match: from_city = a boarding point (origin or a pickup city);
     // to_city = an alighting point (destination or a dropoff city). A dropoff
     // city does NOT make the trip boardable there, and vice versa.
-    const cityFilters: Prisma.TripWhereInput[] = [];
-    if (query.from_city) {
-      cityFilters.push({
-        OR: [{ originCity: query.from_city }, { pickupCities: { has: query.from_city } }],
-      });
+    // Both filters use array sets: [city] for the exact tier, or the whole
+    // raion's settlements for the nearby tier (IN uses idx_trips_search,
+    // hasSome uses the GIN indexes on pickup/dropoff arrays).
+    const applyCityFilters = (fromNames: string[], toNames: string[]): void => {
+      const cityFilters: Prisma.TripWhereInput[] = [];
+      if (fromNames.length > 0) {
+        cityFilters.push({
+          OR: [{ originCity: { in: fromNames } }, { pickupCities: { hasSome: fromNames } }],
+        });
+      }
+      if (toNames.length > 0) {
+        cityFilters.push({
+          OR: [{ destinationCity: { in: toNames } }, { dropoffCities: { hasSome: toNames } }],
+        });
+      }
+      where.AND = cityFilters.length > 0 ? cityFilters : undefined;
+    };
+    const expandCities = async (): Promise<[string[], string[]]> =>
+      Promise.all([
+        query.from_city ? districtCityNames(prisma, query.from_city) : Promise.resolve([]),
+        query.to_city ? districtCityNames(prisma, query.to_city) : Promise.resolve([]),
+      ]);
+    if (nearby) {
+      applyCityFilters(...(await expandCities()));
+    } else {
+      applyCityFilters(
+        query.from_city ? [query.from_city] : [],
+        query.to_city ? [query.to_city] : [],
+      );
     }
-    if (query.to_city) {
-      cityFilters.push({
-        OR: [{ destinationCity: query.to_city }, { dropoffCities: { has: query.to_city } }],
-      });
-    }
-    if (cityFilters.length > 0) where.AND = cityFilters;
     if (query.date) {
       const start = new Date(query.date);
       const end = new Date(start.getTime() + 24 * 60 * 60_000);
@@ -311,31 +338,46 @@ export function createTripsService(
           ? [{ driver: { rating: 'desc' } }, loyaltyOrder, { departureAt: 'asc' }, { id: 'asc' }]
           : [loyaltyOrder, { departureAt: 'asc' }, { id: 'asc' }];
 
-    const rows = await prisma.trip.findMany({
-      where,
-      orderBy,
-      ...cursorArgs({ cursor: query.cursor, limit: query.limit }),
-      include: {
-        driver: {
-          select: {
-            id: true,
-            name: true,
-            avatarUrl: true,
-            rating: true,
-            ratingCount: true,
-            driverProfile: {
-              select: {
-                carMake: true,
-                carModel: true,
-                carColor: true,
-                carPlate: true,
-                verificationStatus: true,
+    const runQuery = () =>
+      prisma.trip.findMany({
+        where,
+        orderBy,
+        ...cursorArgs({ cursor: query.cursor, limit: query.limit }),
+        include: {
+          driver: {
+            select: {
+              id: true,
+              name: true,
+              avatarUrl: true,
+              rating: true,
+              ratingCount: true,
+              driverProfile: {
+                select: {
+                  carMake: true,
+                  carModel: true,
+                  carColor: true,
+                  carPlate: true,
+                  verificationStatus: true,
+                },
               },
             },
           },
         },
-      },
-    });
+      });
+
+    let rows = await runQuery();
+
+    // Nothing matched the exact cities on the first page → widen once to the
+    // same-raion tier ("sub-cities": villages of the searched city's district)
+    // and mark the response so the client can label results as nearby.
+    if (rows.length === 0 && !nearby && !query.cursor && (query.from_city || query.to_city)) {
+      const [fromNames, toNames] = await expandCities();
+      if (fromNames.length > 1 || toNames.length > 1) {
+        nearby = true;
+        applyCityFilters(fromNames, toNames);
+        rows = await runQuery();
+      }
+    }
 
     const likedSet = await engagement.likedIds('trip', rows.map((r) => r.id), viewerId);
     const mapped = rows.map((r) =>
@@ -344,7 +386,13 @@ export function createTripsService(
         isOwner: viewerId !== null && r.driverId === viewerId,
       }),
     );
-    return sliceAndNext(mapped, query.limit);
+    const page = sliceAndNext(mapped, query.limit);
+    if (!nearby) return page;
+    return {
+      ...page,
+      nearby: true,
+      nextCursor: page.nextCursor ? `nb_${page.nextCursor}` : null,
+    };
   }
 
   // ─── Detail ─────────────────────────────────────────────────────────

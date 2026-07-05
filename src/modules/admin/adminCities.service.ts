@@ -9,8 +9,8 @@ export interface AdminCitiesService {
     id: number;
     nameRu: string;
     nameKg: string;
-    nameEn: string;
-    regionNameRu: string;
+    nameEn: string | null;
+    regionNameRu: string | null;
     lat: number | null;
     lng: number | null;
     isActive: boolean;
