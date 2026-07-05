@@ -41,6 +41,20 @@ export function createNotificationsRouter(prisma: PrismaClient): Router {
     }),
   );
 
+  // Bulk: one UPDATE marks everything unread, including rows on pages the
+  // client never loaded (the old client-side fan-out missed those).
+  router.patch(
+    '/read-all',
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const r = await prisma.notification.updateMany({
+        where: { userId: req.user!.id, readAt: null },
+        data: { readAt: new Date() },
+      });
+      res.json({ updated: r.count });
+    }),
+  );
+
   router.patch(
     '/:id/read',
     requireAuth,

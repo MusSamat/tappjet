@@ -161,7 +161,9 @@ export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
   async function send(
     userId: string,
     tpl: MessageTemplate,
-    vars: Vars,
+    // Callers pass a function when a var depends on the recipient's language
+    // (e.g. formatDepartureDate) — the language is only known here.
+    vars: Vars | ((lang: 'ru' | 'kg') => Vars),
     keyboard?: (lang: 'ru' | 'kg') => InlineKeyboard | undefined,
   ): Promise<void> {
     if (!bot) return;
@@ -171,7 +173,7 @@ export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
     });
     if (!user || !user.telegramId || !user.notificationsEnabled) return;
     const lang: 'ru' | 'kg' = user.language === 'kg' ? 'kg' : 'ru';
-    const text = render(tpl, lang, vars);
+    const text = render(tpl, lang, typeof vars === 'function' ? vars(lang) : vars);
     const kb = keyboard?.(lang);
     try {
       await bot.api.sendMessage(Number(user.telegramId), text, {
@@ -191,14 +193,14 @@ export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
       await send(
         driverUserId,
         T.new_booking_request,
-        {
+        (lang) => ({
           passengerName,
           ratingSuffix,
           from: trip.originCity,
           to: trip.destinationCity,
-          date: formatDepartureDate(trip.departureAt, 'ru'),
+          date: formatDepartureDate(trip.departureAt, lang),
           seats: booking.seatsCount,
-        },
+        }),
         (lang) => {
           const kb = new InlineKeyboard()
             .text(L(lang, '✅ Принять', '✅ Кабыл алуу'), `accept_booking_${booking.id}`)
@@ -244,11 +246,11 @@ export function createTelegramNotifier(deps: TelegramNotifierDeps): Notifier {
       }
     },
     async tripCancelled(passengerUserId, { trip }) {
-      await send(passengerUserId, T.trip_cancelled, {
+      await send(passengerUserId, T.trip_cancelled, (lang) => ({
         from: trip.originCity,
         to: trip.destinationCity,
-        date: formatDepartureDate(trip.departureAt, 'ru'),
-      });
+        date: formatDepartureDate(trip.departureAt, lang),
+      }));
     },
     async newMessage(recipientUserId, { message }) {
       const sender = await prisma.user.findUnique({
@@ -452,7 +454,11 @@ export async function startTelegramBot(
       return;
     }
 
-    const firstName = ctx.from?.first_name ?? 'друг';
+    // User-controlled name goes into parse_mode:'HTML' — escape it, otherwise
+    // a name containing <>& breaks rendering (or the sendMessage call itself).
+    const escapeHtml = (v: string): string =>
+      v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const firstName = escapeHtml(ctx.from?.first_name ?? 'друг');
     const isReturning = ctx.from
       ? !!(await prisma.authProvider.findFirst({
           where: { provider: 'telegram', providerUserId: String(ctx.from.id) },
