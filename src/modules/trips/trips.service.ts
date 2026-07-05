@@ -4,6 +4,7 @@ import { assertActiveUser } from '@/lib/assertUser.js';
 import { toFileUrl } from '@/lib/uploads.js';
 import { cursorArgs, sliceAndNext } from '@/lib/pagination.js';
 import { districtCityNames } from '@/lib/cityArea.js';
+import { redactContactInfo } from '@/lib/contentFilter.js';
 import { estimateDurationMin } from '@/lib/routes.js';
 import { logger } from '@/lib/logger.js';
 import type { Notifier } from '@/lib/notifier.js';
@@ -228,7 +229,7 @@ export function createTripsService(
           priceNegotiable: body.priceNegotiable,
           luggage: body.luggage,
           preferences: body.preferences as Prisma.InputJsonValue,
-          comment: body.comment ?? null,
+          comment: redactContactInfo(body.comment).clean,
           status: 'active',
           idempotencyKey,
         },
@@ -470,7 +471,7 @@ export function createTripsService(
     if (body.pricePerSeat !== undefined) data.pricePerSeat = body.pricePerSeat;
     if (body.priceNegotiable !== undefined) data.priceNegotiable = body.priceNegotiable;
     if (body.luggage !== undefined) data.luggage = body.luggage;
-    if (body.comment !== undefined) data.comment = body.comment;
+    if (body.comment !== undefined) data.comment = redactContactInfo(body.comment).clean;
     if (body.preferences !== undefined) {
       data.preferences = body.preferences as Prisma.InputJsonValue;
     }

@@ -3,6 +3,7 @@ import { Errors } from '@/lib/errors.js';
 import { toFileUrl } from '@/lib/uploads.js';
 import { createEngagementService } from '@/lib/engagement.js';
 import { districtCityNames } from '@/lib/cityArea.js';
+import { redactContactInfo } from '@/lib/contentFilter.js';
 import type { Notifier } from '@/lib/notifier.js';
 import type { CreatePassengerRequestInput, ListRequestsInput, RespondInput } from './passenger-requests.schemas.js';
 
@@ -124,7 +125,7 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
         seatsNeeded: input.seatsNeeded,
         departureDate: departure,
         flexible: input.flexible ?? false,
-        comment: input.comment ?? null,
+        comment: redactContactInfo(input.comment).clean,
         status: 'open',
       },
       include: { passenger: { select: passengerSelect } },
