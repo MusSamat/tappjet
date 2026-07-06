@@ -3,14 +3,12 @@ import { authenticator } from 'otplib';
 import { env } from '@/config/env.js';
 import { Errors } from '@/lib/errors.js';
 import * as password from '@/lib/bcrypt.js';
-import { getSmsProvider } from '@/lib/sms.js';
 import { validateTelegramContactResponse, validateTelegramInitData } from '@/lib/telegram.js';
 import { verifyGoogleIdToken } from '@/lib/oauth/google.js';
 import { verifyAppleIdentityToken } from '@/lib/oauth/apple.js';
 import { issueFullAuthForUser } from './auth.helpers.js';
 import { sha256Hex } from '@/lib/random.js';
 import { signAdminAccessToken, signAdminRefreshToken, refreshTtlSeconds } from '@/lib/jwt.js';
-import { logger } from '@/lib/logger.js';
 import { assertActiveUser } from '@/lib/assertUser.js';
 import type { StartPhoneChangeInput } from './auth.schemas.js';
 import type { AdminAuthResult, AuthResult } from './auth.types.js';
@@ -134,12 +132,11 @@ export function createPasswordMethods(
       data: { revokedAt: new Date() },
     });
 
-    await getSmsProvider()
-      .send(
-        oldPhone,
-        'Tappjet: номер телефона в вашем аккаунте был изменён. Если не вы — свяжитесь с поддержкой.',
-      )
-      .catch((err) => logger.warn({ err }, 'phone_change notice to old number failed'));
+    // SMS "your number was changed" notice to the OLD number is disabled during
+    // the Telegram-only testing period (Telegram Gateway only sends verification
+    // codes, not free-text notices). Re-enable with SMS, or DM via the bot.
+    // await getSmsProvider().send(oldPhone, 'Tappjet: номер телефона в вашем аккаунте был изменён…');
+    void oldPhone;
 
     return result;
   }

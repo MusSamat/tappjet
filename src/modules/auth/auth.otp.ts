@@ -2,7 +2,11 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { Errors, AppError } from '@/lib/errors.js';
 import * as password from '@/lib/bcrypt.js';
 import { generateOtp, generateUuid } from '@/lib/random.js';
-import { getSmsProvider } from '@/lib/sms.js';
+import { recordSent } from '@/lib/sms.js';
+// Telegram Gateway is commented out for now — the number is obtained only via
+// Telegram (Mini App requestContact / browser bot request_contact). Re-enable
+// the sendGatewayVerification call in sendOtp (and this import) when a token exists.
+// import { sendGatewayVerification } from '@/lib/telegramGateway.js';
 import { logger } from '@/lib/logger.js';
 import { env } from '@/config/env.js';
 import type { Provider } from '@/lib/jwt.js';
@@ -131,6 +135,18 @@ export async function handleBotLoginToken(
     await bot.api.sendMessage(telegramId, 'Ваш аккаунт заблокирован. Обратитесь в поддержку.');
     return 'blocked';
   }
+  if (!user.phoneVerifiedAt) {
+    // Existing account logged in via Telegram but with NO verified number yet
+    // (provisional account). Ask for the phone via request_contact before
+    // finishing — in a plain browser this is the only way to obtain it, since
+    // Mini App requestContact is unavailable there. The token stays 'waiting'
+    // so registerFromTelegramContact binds the number to THIS account.
+    await prisma.telegramBotLoginToken.update({
+      where: { token },
+      data: { telegramId: BigInt(telegramId) },
+    });
+    return 'need_contact';
+  }
   await prisma.telegramBotLoginToken.update({
     where: { token },
     data: { status: 'done', userId: user.id },
@@ -213,10 +229,16 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     const code = await createOtpRecord(prisma, phone);
     const text = `Tappjet: ${code} — код подтверждения. Срок действия: 10 минут.`;
     try {
-      await getSmsProvider().send(phone, text);
+      // Real delivery is DISABLED for now — the phone number is obtained only via
+      // Telegram (Mini App requestContact, or browser login via the bot's
+      // request_contact button). Nothing is sent to the number; the code is just
+      // captured/logged locally so dev + tests keep working.
+      recordSent(phone, text);
+      // await sendGatewayVerification(phone, code, text, OTP_TTL_SEC);  // Telegram Gateway (needs token)
+      // await getSmsProvider().send(phone, text);                       // SMS
     } catch (err) {
-      logger.error({ err, phone }, 'SMS send failed');
-      throw Errors.serviceUnavailable('SMS delivery failed');
+      logger.error({ err, phone }, 'OTP delivery failed');
+      throw Errors.serviceUnavailable('OTP delivery failed');
     }
     const isDev = process.env.NODE_ENV !== 'production';
     return {

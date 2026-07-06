@@ -37,6 +37,10 @@ const EnvSchema = z.object({
 
   TELEGRAM_BOT_TOKEN: z.string().default(''),
   TELEGRAM_BOT_USERNAME: z.string().default('tappjet_bot'),
+  // Telegram Gateway API token — delivers OTP codes to a phone over Telegram
+  // (https://gateway.telegram.org). Empty during the testing period: codes are
+  // captured/logged locally instead of sent (see lib/telegramGateway.ts).
+  TELEGRAM_GATEWAY_TOKEN: z.string().default(''),
 
   // OAuth — audience / client IDs to match in verified JWTs. Comma-separated
   // so the Flutter app and the Web client can use different client ids.

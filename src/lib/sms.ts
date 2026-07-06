@@ -1,4 +1,3 @@
-import { env } from '@/config/env.js';
 import { logger } from '@/lib/logger.js';
 
 export interface SmsProvider {
@@ -9,19 +8,31 @@ export interface SmsProvider {
 // grows unbounded in dev — intentional, it's a debug tool. Tests reset it.
 const sent: { phone: string; text: string; at: Date }[] = [];
 
-const MockProvider: SmsProvider = {
-  async send(phone, text) {
-    sent.push({ phone, text, at: new Date() });
-    logger.info({ phone, text }, '[MOCK SMS]');
-  },
-};
-
-// Real providers (Mega.kg, Nikita) to be wired in Sprint 2 — keeping the
-// abstraction so swap is one line. For now unknown providers throw.
-export function getSmsProvider(): SmsProvider {
-  if (env.SMS_PROVIDER === 'mock') return MockProvider;
-  throw new Error(`SMS provider "${env.SMS_PROVIDER}" is not implemented yet`);
+// Record a delivery in the local capture buffer. Used by the mock provider and
+// by the Telegram Gateway fallback when no token is configured, so dev/test
+// flows can still read the code via getSentMessages().
+export function recordSent(phone: string, text: string): void {
+  sent.push({ phone, text, at: new Date() });
+  logger.info({ phone, text }, '[OTP CAPTURE]');
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// SMS delivery is DISABLED for the Telegram-only testing period. OTP now goes
+// through Telegram Gateway (see lib/telegramGateway.ts). The real providers
+// (Mega.kg, Nikita) are commented out; re-enable by restoring getSmsProvider()
+// and the SMS delivery call in auth.otp.ts.
+// ───────────────────────────────────────────────────────────────────────────
+//
+// const MockProvider: SmsProvider = {
+//   async send(phone, text) {
+//     recordSent(phone, text);
+//   },
+// };
+//
+// export function getSmsProvider(): SmsProvider {
+//   if (env.SMS_PROVIDER === 'mock') return MockProvider;
+//   throw new Error(`SMS provider "${env.SMS_PROVIDER}" is not implemented yet`);
+// }
 
 export function getSentMessages(): ReadonlyArray<{ phone: string; text: string; at: Date }> {
   return sent;
