@@ -281,6 +281,18 @@ export function createBookingsService(prisma: PrismaClient, notifier: Notifier):
     });
 
     const full = await loadDTO(prisma, result);
+    // The request is decided — its bell notification is no longer actionable.
+    // Marking it read keeps web and Telegram in sync regardless of where the
+    // driver pressed «Принять».
+    await prisma.notification.updateMany({
+      where: {
+        userId: driverUserId,
+        type: 'new_booking_request',
+        readAt: null,
+        payload: { path: ['bookingId'], equals: bookingId },
+      },
+      data: { readAt: new Date() },
+    });
     await notifier.bookingAccepted(full.passenger.id, { booking: full });
     await notifier.bookingRequestConfirmed(full.trip.driverId, {
       booking: full,
@@ -347,6 +359,17 @@ export function createBookingsService(prisma: PrismaClient, notifier: Notifier):
     await prisma.booking.update({
       where: { id: bookingId },
       data: { status: 'rejected' },
+    });
+
+    // Decided → mark the driver's bell notification read (web ⇄ Telegram sync).
+    await prisma.notification.updateMany({
+      where: {
+        userId: driverUserId,
+        type: 'new_booking_request',
+        readAt: null,
+        payload: { path: ['bookingId'], equals: bookingId },
+      },
+      data: { readAt: new Date() },
     });
 
     const full = await loadDTO(prisma, bookingId);
