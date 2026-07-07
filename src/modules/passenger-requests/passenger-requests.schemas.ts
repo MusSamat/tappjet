@@ -33,6 +33,12 @@ export type ListRequestsInput = z.infer<typeof ListRequestsQuery>;
 
 export const RequestIdParam = z.object({ id: z.string().uuid() });
 
+// Per-day open-request counts for the route (calendar hints in the date picker).
+export const RequestCalendarQuery = z.object({
+  from_city: CityName,
+  to_city: CityName,
+});
+
 export const RespondBody = z.object({
   price: z.number().int().min(1).max(100_000),
   departureTime: z.string().datetime({ offset: true }),

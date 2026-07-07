@@ -119,6 +119,9 @@ model Trip {
   waypoints            Json      @default("[]")
   departureAt          DateTime  @map("departure_at") @db.Timestamptz(6)
   departureFlexible    Boolean   @default(false) @map("departure_flexible")
+  // «Выезд примерно 06:00–11:00»: departureAt = window start, this = window end.
+  // NULL = exact departure time.
+  departureWindowEnd   DateTime? @map("departure_window_end") @db.Timestamptz(6)
   estimatedDurationMin Int       @map("estimated_duration_min")
   seatsTotal           Int       @map("seats_total") @db.SmallInt
   seatsAvailable       Int       @map("seats_available") @db.SmallInt

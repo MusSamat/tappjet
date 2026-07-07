@@ -21,3 +21,4 @@ var/
 # Local config overrides
 *.local
 claude
+.claude/

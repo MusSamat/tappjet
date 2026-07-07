@@ -278,7 +278,24 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     return { liked: false };
   }
 
-  return { create, list, listMy, cancel, getById, like, unlike, recordView };
+  // Per-day open-request counts for a route — calendar hints in the date
+  // picker. Days are Kyrgyzstan-local (fixed UTC+6).
+  async function calendar(query: { from_city: string; to_city: string }) {
+    const rows = await prisma.$queryRaw<{ day: string; n: number }[]>`
+      SELECT to_char(departure_date AT TIME ZONE 'Asia/Bishkek', 'YYYY-MM-DD') AS day,
+             COUNT(*)::int AS n
+      FROM passenger_requests
+      WHERE status = 'open'
+        AND departure_date > NOW()
+        AND origin_city = ${query.from_city}
+        AND destination_city = ${query.to_city}
+      GROUP BY 1
+      ORDER BY 1
+    `;
+    return { data: rows.map((r) => ({ date: r.day, count: r.n })) };
+  }
+
+  return { create, list, listMy, cancel, getById, like, unlike, recordView, calendar };
 }
 
 // ─── Response DTO ─────────────────────────────────────────────────────

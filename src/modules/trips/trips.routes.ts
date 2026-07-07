@@ -7,6 +7,7 @@ import {
   IdempotencyHeader,
   MyTripsQuery,
   PriceSuggestionQuery,
+  TripCalendarQuery,
   TripCreateBody,
   TripIdParam,
   TripPatchBody,
@@ -65,6 +66,18 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
       const result = await service.myTrips(
         req.user!.id,
         req.query as unknown as Parameters<typeof service.myTrips>[1],
+      );
+      res.json(result);
+    }),
+  );
+
+  // GET /trips/calendar — per-day counts for the date picker (before /:id).
+  router.get(
+    '/calendar',
+    validate({ query: TripCalendarQuery }),
+    asyncHandler(async (req, res) => {
+      const result = await service.calendar(
+        req.query as unknown as Parameters<typeof service.calendar>[0],
       );
       res.json(result);
     }),

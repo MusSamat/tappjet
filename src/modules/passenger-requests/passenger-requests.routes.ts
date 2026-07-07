@@ -6,6 +6,7 @@ import { createPassengerRequestsService, createPassengerRequestResponsesService 
 import {
   CreatePassengerRequestBody,
   ListRequestsQuery,
+  RequestCalendarQuery,
   RequestIdParam,
   RespondBody,
   ResponseIdParam,
@@ -39,6 +40,19 @@ export function createPassengerRequestsRouter(prisma: PrismaClient, notifier: No
     requireAuth,
     asyncHandler(async (req, res) => {
       const result = await service.listMy(req.user!.id);
+      res.json(result);
+    }),
+  );
+
+  // GET /passenger-requests/calendar — per-day counts for the date picker
+  // (must come before /:id).
+  router.get(
+    '/calendar',
+    validate({ query: RequestCalendarQuery }),
+    asyncHandler(async (req, res) => {
+      const result = await service.calendar(
+        req.query as unknown as Parameters<typeof service.calendar>[0],
+      );
       res.json(result);
     }),
   );

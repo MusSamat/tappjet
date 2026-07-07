@@ -41,6 +41,7 @@ export interface TripListItem {
   dropoffCities: string[];
   originAddress: string;
   departureAt: Date;
+  departureWindowEnd: Date | null;
   departureFlexible: boolean;
   estimatedDurationMin: number;
   seatsTotal: number;
@@ -96,6 +97,9 @@ export interface TripsService {
   priceSuggestion(from: string, to: string): Promise<{
     averagePrice: number | null;
     sampleSize: number;
+  }>;
+  calendar(query: { from_city: string; to_city: string }): Promise<{
+    data: { date: string; count: number }[];
   }>;
 }
 
@@ -223,6 +227,7 @@ export function createTripsService(
           dropoffCities,
           waypoints: body.waypoints as Prisma.InputJsonValue,
           departureAt,
+          departureWindowEnd: body.departureWindowEnd ? new Date(body.departureWindowEnd) : null,
           departureFlexible: body.departureFlexible,
           estimatedDurationMin,
           seatsTotal: body.seatsTotal,
@@ -736,6 +741,23 @@ export function createTripsService(
     };
   }
 
+  // Per-day active-trip counts for a route — powers the calendar availability
+  // hints in the date picker. Days are Kyrgyzstan-local (fixed UTC+6).
+  async function calendar(query: { from_city: string; to_city: string }) {
+    const rows = await prisma.$queryRaw<{ day: string; n: number }[]>`
+      SELECT to_char(departure_at AT TIME ZONE 'Asia/Bishkek', 'YYYY-MM-DD') AS day,
+             COUNT(*)::int AS n
+      FROM trips
+      WHERE status = 'active'
+        AND departure_at > NOW()
+        AND origin_city = ${query.from_city}
+        AND destination_city = ${query.to_city}
+      GROUP BY 1
+      ORDER BY 1
+    `;
+    return { data: rows.map((r) => ({ date: r.day, count: r.n })) };
+  }
+
   return {
     create,
     search,
@@ -748,6 +770,7 @@ export function createTripsService(
     unlike,
     recordView,
     priceSuggestion,
+    calendar,
   };
 }
 
@@ -808,6 +831,7 @@ export function toListItem(
     dropoffCities: row.dropoffCities,
     originAddress: row.originAddress,
     departureAt: row.departureAt,
+    departureWindowEnd: row.departureWindowEnd,
     departureFlexible: row.departureFlexible,
     estimatedDurationMin: row.estimatedDurationMin,
     seatsTotal: row.seatsTotal,

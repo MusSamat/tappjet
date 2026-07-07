@@ -482,6 +482,17 @@ export async function startTelegramBot(
         }))
       : false;
 
+    // Driver role is granted only on admin verification, so `roles` includes
+    // 'driver' iff the user is a verified driver — the signal that gates the
+    // «Найти пассажира» action (browse passenger requests to respond to).
+    const dbUser = ctx.from
+      ? await prisma.user.findFirst({
+          where: { telegramId: BigInt(ctx.from.id) },
+          select: { roles: true },
+        })
+      : null;
+    const isDriver = dbUser?.roles?.includes('driver') ?? false;
+
     const greeting = isReturning
       ? `👋 С возвращением, <b>${firstName}</b>!`
       : `👋 Привет, <b>${firstName}</b>!`;
@@ -497,8 +508,14 @@ export async function startTelegramBot(
 
     const kb = new InlineKeyboard();
     if (MINI_APP_HTTPS) {
-      kb.webApp('🔍 Найти машину', miniAppUrl('/trips')).row();
-      kb.webApp('🚗 Найти пассажира', miniAppUrl('/trips')).row();
+      // Passengers & everyone: browse driver trips. Verified drivers also get
+      // «Найти пассажира» (→ requests); non-drivers are nudged to get verified.
+      kb.webApp('🔍 Найти поездку', miniAppUrl('/trips')).row();
+      if (isDriver) {
+        kb.webApp('🧍 Найти пассажира', miniAppUrl('/requests')).row();
+      } else {
+        kb.webApp('🚗 Стать водителем', miniAppUrl('/profile/driver')).row();
+      }
     }
     kb.text('🌐 Язык', 'lang').text('🔔 Уведомления', 'notify').row();
     kb.text('ℹ️ Помощь', 'help');

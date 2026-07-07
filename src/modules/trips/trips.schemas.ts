@@ -30,6 +30,8 @@ export const TripCreateBody = z
     dropoffCities: RouteCities,
     waypoints: z.array(Waypoint).max(3).default([]),
     departureAt: z.string().datetime({ offset: true }),
+    // Optional «выезд примерно до» — trip departs between departureAt and this.
+    departureWindowEnd: z.string().datetime({ offset: true }).optional(),
     departureFlexible: z.boolean().default(false),
     seatsTotal: z.coerce.number().int().min(1).max(7),
     pricePerSeat: z.coerce.number().int().min(50).max(10_000),
@@ -48,11 +50,27 @@ export const TripCreateBody = z
   .refine((v) => v.originCity !== v.destinationCity, {
     message: 'origin and destination must differ',
     path: ['destinationCity'],
-  });
+  })
+  .refine(
+    (v) => {
+      if (!v.departureWindowEnd) return true;
+      const start = Date.parse(v.departureAt);
+      const end = Date.parse(v.departureWindowEnd);
+      // Window must end after it starts and stay within the same 24h.
+      return end > start && end - start <= 24 * 60 * 60 * 1000;
+    },
+    { message: 'departureWindowEnd must be after departureAt (max 24h)', path: ['departureWindowEnd'] },
+  );
 
 export type TripCreateInput = z.infer<typeof TripCreateBody>;
 
 export const TripIdParam = z.object({ id: z.string().uuid() });
+
+// Per-day trip counts for the route (calendar availability in the date picker).
+export const TripCalendarQuery = z.object({
+  from_city: CityName,
+  to_city: CityName,
+});
 
 export const TripSearchQuery = z.object({
   from_city: CityName.optional(),
