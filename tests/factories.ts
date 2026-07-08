@@ -148,6 +148,17 @@ export async function createVerifiedDriver(
       verifiedAt: new Date(),
     },
   });
+  // Phase 1: publishing is gated by a garage car (cars table), not the profile.
+  await prisma.car.create({
+    data: {
+      userId: base.id,
+      make: 'Toyota',
+      model: 'Camry',
+      color: 'White',
+      plate: overrides.plate ?? `D${Math.floor(Math.random() * 900_000 + 100_000)}`,
+      seatsCount: overrides.seatsCount ?? 4,
+    },
+  });
   return { ...base, driverProfileId: dp.id };
 }
 

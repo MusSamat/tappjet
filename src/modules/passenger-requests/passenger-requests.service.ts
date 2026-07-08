@@ -4,6 +4,7 @@ import { toFileUrl } from '@/lib/uploads.js';
 import { createEngagementService } from '@/lib/engagement.js';
 import { districtCityNames } from '@/lib/cityArea.js';
 import { redactContactInfo } from '@/lib/contentFilter.js';
+import { bishkekDayRange } from '@/lib/dates.js';
 import type { Notifier } from '@/lib/notifier.js';
 import type { CreatePassengerRequestInput, ListRequestsInput, RespondInput } from './passenger-requests.schemas.js';
 
@@ -21,7 +22,7 @@ export interface PassengerRequestDTO {
   liked: boolean;
   // The viewing driver's own response to this request (guards double-respond).
   myResponse: { id: string; status: string } | null;
-  metrics: { views: number; likes: number } | null;
+  metrics: { views: number; likes: number; contacts: number };
   passenger: {
     id: string;
     name: string;
@@ -55,7 +56,7 @@ export function toDTO(
       ratingCount: number;
     };
   },
-  opts: { liked: boolean; isOwner: boolean; myResponse?: { id: string; status: string } | null },
+  opts: { liked: boolean; contacts?: number; myResponse?: { id: string; status: string } | null },
 ): PassengerRequestDTO {
   return {
     id: row.id,
@@ -70,7 +71,7 @@ export function toDTO(
     createdAt: row.createdAt.toISOString(),
     liked: opts.liked,
     myResponse: opts.myResponse ?? null,
-    metrics: opts.isOwner ? { views: row.viewsCount, likes: row.likesCount } : null,
+    metrics: { views: row.viewsCount, likes: row.likesCount, contacts: opts.contacts ?? 0 },
     passenger: {
       id: row.passenger.id,
       name: row.passenger.name,
@@ -120,6 +121,24 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     if (!origin) throw Errors.validation({ originCity: 'unknown city' });
     if (!dest) throw Errors.validation({ destinationCity: 'unknown city' });
 
+    // Business rule: one open request per route per day (mirrors trips —
+    // duplicates only clutter the feed).
+    const { start: dayStart, end: dayEnd } = bishkekDayRange(departure);
+    const duplicate = await prisma.passengerRequest.count({
+      where: {
+        passengerId,
+        status: 'open',
+        originCity: input.originCity,
+        destinationCity: input.destinationCity,
+        departureDate: { gte: dayStart, lt: dayEnd },
+      },
+    });
+    if (duplicate > 0) {
+      throw Errors.conflict('Passenger already has an open request on this route for this date', {
+        reason: 'duplicate_route_day',
+      });
+    }
+
     const row = await prisma.passengerRequest.create({
       data: {
         passengerId,
@@ -134,7 +153,7 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
       include: { passenger: { select: passengerSelect } },
     });
 
-    return toDTO(row, { liked: false, isOwner: true, myResponse: null });
+    return toDTO(row, { liked: false, myResponse: null });
   }
 
   async function list(
@@ -211,13 +230,22 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     ]);
     const respByRequest = new Map(myResponses.map((r) => [r.requestId, { id: r.id, status: r.status }]));
     return {
-      data: slice.map((r) =>
-        toDTO(r, {
-          liked: likedSet.has(r.id),
-          isOwner: viewerId !== null && r.passengerId === viewerId,
-          myResponse: respByRequest.get(r.id) ?? null,
-        }),
-      ),
+      data: await (async () => {
+        // Public counters in the browse feed too — one groupBy per page.
+        const reveals = await prisma.contactReveal.groupBy({
+          by: ['contextId'],
+          where: { contextType: 'passenger_request', contextId: { in: slice.map((r) => r.id) } },
+          _count: { _all: true },
+        });
+        const revealMap = new Map(reveals.map((c) => [c.contextId, c._count._all]));
+        return slice.map((r) =>
+          toDTO(r, {
+            liked: likedSet.has(r.id),
+            contacts: revealMap.get(r.id) ?? 0,
+            myResponse: respByRequest.get(r.id) ?? null,
+          }),
+        );
+      })(),
       nextCursor: hasMore ? `${nearby ? 'nb_' : ''}${slice[slice.length - 1]!.id}` : null,
       ...(nearby ? { nearby: true } : {}),
     };
@@ -231,7 +259,21 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     });
     const likedSet = await engagement.likedIds('passenger_request', rows.map((r) => r.id), passengerId);
     return {
-      data: rows.map((r) => toDTO(r, { liked: likedSet.has(r.id), isOwner: true, myResponse: null })),
+      data: await (async () => {
+        const reveals = await prisma.contactReveal.groupBy({
+          by: ['contextId'],
+          where: { contextType: 'passenger_request', contextId: { in: rows.map((r) => r.id) } },
+          _count: { _all: true },
+        });
+        const revealMap = new Map(reveals.map((c) => [c.contextId, c._count._all]));
+        return rows.map((r) =>
+          toDTO(r, {
+            liked: likedSet.has(r.id),
+            contacts: revealMap.get(r.id) ?? 0,
+            myResponse: null,
+          }),
+        );
+      })(),
       nextCursor: null,
     };
   }
@@ -264,7 +306,10 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
         : Promise.resolve(null),
     ]);
     // Views are counted via an explicit client POST /:id/view, not on read.
-    return toDTO(row, { liked, isOwner: viewerId !== null && row.passengerId === viewerId, myResponse: myResp });
+    const contacts = await prisma.contactReveal.count({
+      where: { contextType: 'passenger_request', contextId: row.id },
+    });
+    return toDTO(row, { liked, contacts, myResponse: myResp });
   }
 
   async function like(id: string, userId: string): Promise<{ liked: boolean }> {

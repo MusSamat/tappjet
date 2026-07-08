@@ -68,7 +68,7 @@ export function createLikesService(prisma: PrismaClient) {
         // Preserve like order; skip listings that were deleted meanwhile.
         items = page.flatMap((l) => {
           const row = byId.get(l.targetId);
-          return row ? [toListItem(row, { liked: true, isOwner: row.driverId === userId })] : [];
+          return row ? [toListItem(row, { liked: true })] : [];
         });
       } else {
         const rows = await prisma.passengerRequest.findMany({
@@ -78,7 +78,7 @@ export function createLikesService(prisma: PrismaClient) {
         const byId = new Map(rows.map((r) => [r.id, r]));
         items = page.flatMap((l) => {
           const row = byId.get(l.targetId);
-          return row ? [toDTO(row, { liked: true, isOwner: row.passengerId === userId })] : [];
+          return row ? [toDTO(row, { liked: true })] : [];
         });
       }
     }

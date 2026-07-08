@@ -53,6 +53,25 @@ describe('POST /v1/passenger-requests', () => {
     expect(await testPrisma.passengerRequest.count()).toBe(1);
   });
 
+  it('enforces one open request per route per day (reverse route allowed)', async () => {
+    const p = await createUser(testPrisma);
+    const first = await createRequest(p);
+    expect(first.status).toBe(201);
+
+    // Same route, same KG day -> duplicate.
+    const dup = await createRequest(p);
+    expect(dup.status).toBe(409);
+    expect(dup.body.error.details.reason).toBe('duplicate_route_day');
+
+    // Reverse route (A->B vs B->A) on the same day is a different route -> OK.
+    const reverse = await createRequest(p, { originCity: 'Ош', destinationCity: 'Бишкек' });
+    expect(reverse.status).toBe(201);
+
+    // Same route on another day -> OK.
+    const otherDay = await createRequest(p, { departureDate: dayAfter() });
+    expect(otherDay.status).toBe(201);
+  });
+
   it('401 without token', async () => {
     const res = await request(app)
       .post('/v1/passenger-requests')

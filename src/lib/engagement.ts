@@ -58,18 +58,20 @@ export function createEngagementService(prisma: PrismaClient) {
     if (viewer.userId && viewer.userId === ownerId) return; // skip owner self-view
 
     try {
-      await prisma.$transaction(async (tx) => {
-        await tx.listingView.create({ data: { targetType: target, targetId: id, viewerKey } });
-        await counter(tx, target).update({
-          where: { id },
-          data: { viewsCount: { increment: 1 } },
-        });
+      // Early stage: EVERY open counts (repeat views inflate deliberately —
+      // lively counters sell the marketplace). Self-views stay excluded above.
+      await counter(prisma, target).update({
+        where: { id },
+        data: { viewsCount: { increment: 1 } },
       });
+      // First-view audit row is kept (unique per viewer) — repeats just skip it.
+      await prisma.listingView
+        .create({ data: { targetType: target, targetId: id, viewerKey } })
+        .catch((err: unknown) => {
+          if ((err as { code?: string }).code === 'P2002') return;
+          throw err;
+        });
     } catch (err) {
-      // P2002 = this viewer already counted → unique view, no-op.
-      if (typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002') {
-        return;
-      }
       logger.warn({ err, target, id }, 'recordView failed');
     }
   }

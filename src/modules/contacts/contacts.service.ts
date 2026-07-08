@@ -32,14 +32,9 @@ export function createContactsService(prisma: PrismaClient) {
     contextType: 'trip' | 'passenger_request',
     contextId: string,
   ): Promise<void> {
-    // Repeat taps on the same trip/request don't create rows (and so don't
-    // eat the daily limit) — unique (viewer, context).
-    await prisma.contactReveal
-      .create({ data: { viewerId, targetUserId, contextType, contextId } })
-      .catch((err: unknown) => {
-        if ((err as { code?: string }).code === 'P2002') return; // already revealed
-        throw err;
-      });
+    // Early stage: EVERY tap is a row — repeat reveals inflate the owner's
+    // counter deliberately. The daily limit still counts rows (anti-scrape).
+    await prisma.contactReveal.create({ data: { viewerId, targetUserId, contextType, contextId } });
   }
 
   /** Driver's phone for an active trip. */
@@ -60,12 +55,7 @@ export function createContactsService(prisma: PrismaClient) {
     const phone = publicPhone(trip.driver.phone);
     if (!phone) throw Errors.conflict('User has no public phone', { reason: 'no_phone' });
 
-    const already = await prisma.contactReveal.findUnique({
-      where: {
-        viewerId_contextType_contextId: { viewerId, contextType: 'trip', contextId: tripId },
-      },
-    });
-    if (!already) await assertUnderDailyLimit(viewerId);
+    await assertUnderDailyLimit(viewerId);
     await audit(viewerId, trip.driverId, 'trip', tripId);
     return { phone, name: trip.driver.name };
   }
@@ -89,16 +79,7 @@ export function createContactsService(prisma: PrismaClient) {
     const phone = publicPhone(request.passenger.phone);
     if (!phone) throw Errors.conflict('User has no public phone', { reason: 'no_phone' });
 
-    const already = await prisma.contactReveal.findUnique({
-      where: {
-        viewerId_contextType_contextId: {
-          viewerId,
-          contextType: 'passenger_request',
-          contextId: requestId,
-        },
-      },
-    });
-    if (!already) await assertUnderDailyLimit(viewerId);
+    await assertUnderDailyLimit(viewerId);
     await audit(viewerId, request.passengerId, 'passenger_request', requestId);
     return { phone, name: request.passenger.name };
   }

@@ -2285,3 +2285,14 @@ COPY public.cities (id, name_ru, name_kg, lat, lng, is_active, name_en, type, re
 \unrestrict 26Pkydh5gdOI9wUD1lNemYDqOfuvqZUVrpLaQljQGcqVu6xBJKmwfnfk8LI9zqp
 
 SET session_replication_role = DEFAULT;
+
+-- Fix-up (2026-07-08): OSM-импорт пропустил столицу области — город Джалал-Абад.
+SELECT setval('cities_id_seq', (SELECT max(id) FROM cities));
+INSERT INTO cities (name_ru, name_kg, name_en, type, region_id, region_name_ru, region_name_kg, lat, lng, prompt, priority, is_active, is_searchable)
+SELECT 'Джалал-Абад','Жалал-Абад','Jalal-Abad','city',
+       (SELECT region_id FROM cities WHERE name_ru='Базар-Коргон' LIMIT 1),
+       'Джалал-Абадская область','Жалал-Абад облусу',
+       40.9333, 73.0,
+       ARRAY['джалал-абад','жалал-абад','jalal-abad','jalalabad','dzhalal-abad','djalalabad'],
+       900, true, true
+WHERE NOT EXISTS (SELECT 1 FROM cities WHERE name_ru='Джалал-Абад');

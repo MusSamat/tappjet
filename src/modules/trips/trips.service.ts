@@ -6,6 +6,7 @@ import { cursorArgs, sliceAndNext } from '@/lib/pagination.js';
 import { districtCityNames } from '@/lib/cityArea.js';
 import { redactContactInfo } from '@/lib/contentFilter.js';
 import { estimateDurationMin } from '@/lib/routes.js';
+import { bishkekDayRange } from '@/lib/dates.js';
 import { logger } from '@/lib/logger.js';
 import type { Notifier } from '@/lib/notifier.js';
 import { createEngagementService } from '@/lib/engagement.js';
@@ -51,9 +52,10 @@ export interface TripListItem {
   luggage: string;
   status: string;
   createdAt: Date;
-  // Engagement: like state for the viewer; metrics only for the creator (driver).
+  // Engagement: like state for the viewer. Early stage: metrics are PUBLIC
+  // (views / likes / phone requests) — lively counters sell the marketplace.
   liked: boolean;
-  metrics: { views: number; likes: number } | null;
+  metrics: { views: number; likes: number; contacts: number };
 }
 
 export interface TripDetail extends TripListItem {
@@ -208,6 +210,24 @@ export function createTripsService(
     }
     if (deltaMs > HORIZON_MAX_DAYS * 24 * 60 * 60_000) {
       throw Errors.validation({ reason: 'departure_too_far', max_days: HORIZON_MAX_DAYS });
+    }
+
+    // Business rule: one active trip per route per day. Kills the spam pattern
+    // «3 одинаковых Бишкек→Ош» while leaving return trips and other dates free.
+    const { start: dayStart, end: dayEnd } = bishkekDayRange(departureAt);
+    const duplicate = await prisma.trip.count({
+      where: {
+        driverId: driverUserId,
+        status: 'active',
+        originCity: body.originCity,
+        destinationCity: body.destinationCity,
+        departureAt: { gte: dayStart, lt: dayEnd },
+      },
+    });
+    if (duplicate > 0) {
+      throw Errors.conflict('Driver already has an active trip on this route for this date', {
+        reason: 'duplicate_route_day',
+      });
     }
 
     const estimatedDurationMin = estimateDurationMin(body.originCity, body.destinationCity);
@@ -408,10 +428,17 @@ export function createTripsService(
     }
 
     const likedSet = await engagement.likedIds('trip', rows.map((r) => r.id), viewerId);
+    // Public counters in search too: phone-request counts, one groupBy per page.
+    const reveals = await prisma.contactReveal.groupBy({
+      by: ['contextId'],
+      where: { contextType: 'trip', contextId: { in: rows.map((r) => r.id) } },
+      _count: { _all: true },
+    });
+    const revealMap = new Map(reveals.map((c) => [c.contextId, c._count._all]));
     const mapped = rows.map((r) =>
       toListItem(r, {
         liked: likedSet.has(r.id),
-        isOwner: viewerId !== null && r.driverId === viewerId,
+        contacts: revealMap.get(r.id) ?? 0,
       }),
     );
     const page = sliceAndNext(mapped, query.limit);
@@ -471,7 +498,12 @@ export function createTripsService(
     // so SSR / crawlers / prefetch don't inflate the count.
 
     return {
-      ...toListItem(row, { liked, isOwner: viewerId !== null && row.driverId === viewerId }),
+      ...toListItem(row, {
+        liked,
+        contacts: await prisma.contactReveal.count({
+          where: { contextType: 'trip', contextId: row.id },
+        }),
+      }),
       comment: row.comment,
       myBooking: myBookingRow,
       preferences: (row.preferences ?? {}) as Record<string, boolean>,
@@ -680,8 +712,17 @@ export function createTripsService(
     });
 
     const likedSet = await engagement.likedIds('trip', rows.map((r) => r.id), driverUserId);
+    // «Сколько раз спросили номер» — owner-only counter from the reveal audit.
+    const reveals = await prisma.contactReveal.groupBy({
+      by: ['contextId'],
+      where: { contextType: 'trip', contextId: { in: rows.map((r) => r.id) } },
+      _count: { _all: true },
+    });
+    const revealMap = new Map(reveals.map((c) => [c.contextId, c._count._all]));
     return sliceAndNext(
-      rows.map((r) => toListItem(r, { liked: likedSet.has(r.id), isOwner: true })),
+      rows.map((r) =>
+        toListItem(r, { liked: likedSet.has(r.id), contacts: revealMap.get(r.id) ?? 0 }),
+      ),
       query.limit,
     );
   }
@@ -871,7 +912,7 @@ export type TripRow = Prisma.TripGetPayload<{
 
 export function toListItem(
   row: TripRow,
-  opts: { liked: boolean; isOwner: boolean },
+  opts: { liked: boolean; contacts?: number },
 ): TripListItem {
   const dp = row.driver.driverProfile;
   return {
@@ -922,7 +963,7 @@ export function toListItem(
     status: row.status,
     createdAt: row.createdAt,
     liked: opts.liked,
-    metrics: opts.isOwner ? { views: row.viewsCount, likes: row.likesCount } : null,
+    metrics: { views: row.viewsCount, likes: row.likesCount, contacts: opts.contacts ?? 0 },
   };
 }
 
@@ -930,16 +971,15 @@ function mapPrismaError(err: unknown): AppError {
   if (err instanceof AppError) return err;
   // P2002 = unique constraint violation. For trip create, the idempotency-key
   // case is already handled via an explicit lookup above, so if we reach here
-  // the conflict is `idx_trips_one_active_per_day` (the only other unique
-  // constraint). Prisma's `meta.target` only lists columns, not the partial
-  // index name — we can't further disambiguate, and don't need to.
+  // the conflict is `idx_trips_route_day_unique` (the only other unique
+  // constraint) — the race-window twin of the explicit duplicate check above.
   if (
     typeof err === 'object' &&
     err !== null &&
     (err as { code?: string }).code === 'P2002'
   ) {
-    return Errors.conflict('Driver already has an active trip on this date', {
-      reason: 'one_active_per_day',
+    return Errors.conflict('Driver already has an active trip on this route for this date', {
+      reason: 'duplicate_route_day',
     });
   }
   logger.error({ err }, 'unexpected prisma error creating trip');

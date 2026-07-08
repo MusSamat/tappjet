@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PLATE_REGEX, normalizePlate } from '@/lib/plate.js';
 
 const CURRENT_YEAR = new Date().getUTCFullYear();
 
@@ -16,22 +17,15 @@ export const DriverVerificationBody = z.object({
     .min(1980, 'car must be from 1980 or newer')
     .max(CURRENT_YEAR + 1, `car_year cannot exceed ${CURRENT_YEAR + 1}`),
   carColor: z.string().trim().min(1).max(30),
-  // KG plate standard (2016+): <region 01–10> "KG" <3 digits> <3 latin letters>,
-  // e.g. 01KG003ADD. Lowercase/spaces are normalized here, format is strict.
+  // Единый стандарт номера — тот же, что в гараже (cars.schemas): после
+  // нормализации 4–10 латинских букв/цифр (покрывает 2016+ формат 01KG123ABC
+  // и номера старого образца).
   carPlate: z
     .string()
     .trim()
-    .transform((v) => v.toUpperCase().replace(/[\s-]/g, ''))
+    .transform(normalizePlate)
     .pipe(
-      z
-        .string()
-        // Standard 2016+ plate, or a manual/legacy entry (uppercase alnum,
-        // 4–10 chars) — the wizard's «ввести вручную» escape hatch for cars
-        // still carrying old-format plates.
-        .regex(
-          /^(?:(?:0[1-9]|10)KG\d{3}[A-Z]{3}|[A-Z0-9]{4,10})$/,
-          'car_plate must be 01KG123ABC or a legacy uppercase plate',
-        ),
+      z.string().regex(PLATE_REGEX, 'car_plate must be 4-10 latin letters and digits'),
     ),
   seatsCount: z.coerce.number().int().min(1).max(7),
 });

@@ -181,7 +181,7 @@ describe('POST /v1/trips', () => {
     expect(res.status).toBe(400);
   });
 
-  it('enforces one active trip per driver per day', async () => {
+  it('enforces one active trip per route per day', async () => {
     const d = await createVerifiedDriver(testPrisma, { plate: 'F1' });
     // Pick the next full KG day so both departures unambiguously land on the
     // same local date regardless of what time the test is run.
@@ -195,13 +195,31 @@ describe('POST /v1/trips', () => {
       .send(tripPayload({ departureAt: dep1.toISOString() }));
     expect(okRes.status).toBe(201);
 
+    // Same route, same KG day → duplicate.
     const conflictRes = await request(app)
       .post('/v1/trips')
       .set('Authorization', `Bearer ${d.accessToken}`)
       .set('Idempotency-Key', idempotencyKey())
       .send(tripPayload({ departureAt: dep2.toISOString() }));
     expect(conflictRes.status).toBe(409);
-    expect(conflictRes.body.error.details.reason).toBe('one_active_per_day');
+    expect(conflictRes.body.error.details.reason).toBe('duplicate_route_day');
+
+    // Different destination on the same day is fine (return trips, other routes).
+    const otherRoute = await request(app)
+      .post('/v1/trips')
+      .set('Authorization', `Bearer ${d.accessToken}`)
+      .set('Idempotency-Key', idempotencyKey())
+      .send(tripPayload({ destinationCity: 'Каракол', departureAt: dep2.toISOString() }));
+    expect(otherRoute.status).toBe(201);
+
+    // Same route on the next KG day is fine too.
+    const nextDay = new Date(kgNoonTomorrow.getTime() + 24 * 60 * 60_000);
+    const otherDay = await request(app)
+      .post('/v1/trips')
+      .set('Authorization', `Bearer ${d.accessToken}`)
+      .set('Idempotency-Key', idempotencyKey())
+      .send(tripPayload({ departureAt: nextDay.toISOString() }));
+    expect(otherDay.status).toBe(201);
   });
 
   it('requires Idempotency-Key header', async () => {

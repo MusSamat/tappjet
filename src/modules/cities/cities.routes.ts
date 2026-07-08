@@ -1,6 +1,13 @@
 import { Router } from 'express';
-import type { PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import { asyncHandler } from '@/middleware/errorHandler.js';
+import {
+  CYR_FOLD_FROM,
+  CYR_FOLD_TO,
+  foldCyrillic,
+  latinToCyrillic,
+  layoutToCyrillic,
+} from '@/lib/translit.js';
 
 /**
  * Public city directory — used by client autocompletes.
@@ -49,8 +56,8 @@ const POPULAR_ROUTES = [
   { from: 'Ош', to: 'Бишкек' },
   { from: 'Бишкек', to: 'Каракол' },
   { from: 'Бишкек', to: 'Нарын' },
-  { from: 'Бишкек', to: 'Жалал-Абад' },
-  { from: 'Ош', to: 'Жалал-Абад' },
+  { from: 'Бишкек', to: 'Джалал-Абад' },
+  { from: 'Ош', to: 'Джалал-Абад' },
   { from: 'Бишкек', to: 'Талас' },
   { from: 'Бишкек', to: 'Балыкчы' },
   { from: 'Ош', to: 'Баткен' },
@@ -103,6 +110,27 @@ export function createCitiesRouter(prisma: PrismaClient): Router {
         // Use raw SQL so we can do ILIKE on both scalar columns AND array elements
         // (Prisma's `has` only does exact element match, not substring search).
         const pattern = `%${q}%`;
+        // Пользователь набирает как умеет: латиницей («jalal», «uzgen») или в
+        // не той раскладке («<birtr» = «Бишкек»). Приводим запрос к кириллице
+        // обоими способами и сравниваем с name_ru/name_kg, сведя RU/KG-буквы
+        // к одному виду (ё→е, ө→о, ү→у, ң→н) — «озгон» находит «Өзгөн».
+        const candidates = new Set<string>([foldCyrillic(q)]);
+        if (/[a-z<>,.;:'"[\]{}`~]/i.test(q)) {
+          candidates.add(foldCyrillic(latinToCyrillic(q)));
+          candidates.add(foldCyrillic(layoutToCyrillic(q)));
+        }
+        const cyrCond = Prisma.join(
+          [...candidates].map(
+            (c) => Prisma.sql`
+              translate(lower(name_ru), ${CYR_FOLD_FROM}, ${CYR_FOLD_TO}) LIKE ${`%${c}%`}
+              OR translate(lower(name_kg), ${CYR_FOLD_FROM}, ${CYR_FOLD_TO}) LIKE ${`%${c}%`}
+              OR EXISTS (
+                SELECT 1 FROM unnest(prompt) AS p
+                WHERE translate(lower(p), ${CYR_FOLD_FROM}, ${CYR_FOLD_TO}) LIKE ${`%${c}%`}
+              )`,
+          ),
+          ' OR ',
+        );
         const rows = await prisma.$queryRaw<CityRow[]>`
           SELECT id, name_ru, name_kg, name_en,
                  region_name_ru, region_name_kg,
@@ -113,13 +141,12 @@ export function createCitiesRouter(prisma: PrismaClient): Router {
           WHERE is_active = true
             AND is_searchable = true
             AND (
-              name_ru   ILIKE ${pattern}
-              OR name_kg  ILIKE ${pattern}
-              OR name_en  ILIKE ${pattern}
+              name_en ILIKE ${pattern}
               OR EXISTS (
                 SELECT 1 FROM unnest(prompt) AS p
                 WHERE p ILIKE ${pattern}
               )
+              OR ${cyrCond}
             )
           ORDER BY priority DESC, name_ru ASC
           LIMIT ${limit}

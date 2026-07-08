@@ -435,7 +435,7 @@ model ContactReveal {
   contextId    String   @map("context_id") @db.Uuid
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  @@unique([viewerId, contextType, contextId])
+  @@index([viewerId, contextType, contextId])
   @@index([viewerId, createdAt])
   @@index([targetUserId])
   @@map("contact_reveals")
