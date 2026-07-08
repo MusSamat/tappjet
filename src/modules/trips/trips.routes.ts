@@ -2,11 +2,13 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { PrismaClient } from '@prisma/client';
 import { createTripsService } from './trips.service.js';
+import { createContactsService } from '../contacts/contacts.service.js';
 import type { Notifier } from '@/lib/notifier.js';
 import {
   IdempotencyHeader,
   MyTripsQuery,
   PriceSuggestionQuery,
+  SeatsAdjustBody,
   TripCalendarQuery,
   TripCreateBody,
   TripIdParam,
@@ -15,13 +17,14 @@ import {
 } from './trips.schemas.js';
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
-import { optionalAuth, requireAuth, requirePhone, requireRole } from '@/middleware/auth.js';
+import { optionalAuth, requireAuth, requirePhone } from '@/middleware/auth.js';
 import { tripCreateLimit } from '@/middleware/rateLimit.js';
 import { Errors } from '@/lib/errors.js';
 
 export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Router {
   const router = Router();
   const service = createTripsService(prisma, notifier);
+  const contacts = createContactsService(prisma);
 
   router.get(
     '/',
@@ -41,7 +44,6 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
     '/',
     requireAuth,
     requirePhone,
-    requireRole('driver'),
     tripCreateLimit,
     validate({ body: TripCreateBody, headers: IdempotencyHeader }),
     asyncHandler(async (req, res) => {
@@ -60,7 +62,6 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
   router.get(
     '/my',
     requireAuth,
-    requireRole('driver'),
     validate({ query: MyTripsQuery }),
     asyncHandler(async (req, res) => {
       const result = await service.myTrips(
@@ -68,6 +69,34 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
         req.query as unknown as Parameters<typeof service.myTrips>[1],
       );
       res.json(result);
+    }),
+  );
+
+  // POST /trips/:id/seats — manual ±1 seat adjust (phone deals happen off-
+  // platform; the driver keeps availability honest). Owner only.
+  router.post(
+    '/:id/seats',
+    requireAuth,
+    validate({ params: TripIdParam, body: SeatsAdjustBody }),
+    asyncHandler(async (req, res) => {
+      const trip = await service.adjustSeats(
+        req.params.id!,
+        req.user!.id,
+        (req.body as { delta: 1 | -1 }).delta,
+      );
+      res.json(trip);
+    }),
+  );
+
+  // POST /trips/:id/contact — reveal the driver's phone («Позвонить»).
+  // Auth-gated + audited + daily-limited; see contacts.service.
+  router.post(
+    '/:id/contact',
+    requireAuth,
+    validate({ params: TripIdParam }),
+    asyncHandler(async (req, res) => {
+      const contact = await contacts.revealForTrip(req.params.id!, req.user!.id);
+      res.json(contact);
     }),
   );
 
@@ -131,7 +160,6 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
   router.patch(
     '/:id',
     requireAuth,
-    requireRole('driver'),
     validate({ params: TripIdParam, body: TripPatchBody }),
     asyncHandler(async (req, res) => {
       const updated = await service.patch(
@@ -146,7 +174,6 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
   router.patch(
     '/:id/complete',
     requireAuth,
-    requireRole('driver'),
     validate({ params: TripIdParam }),
     asyncHandler(async (req, res) => {
       const result = await service.complete(req.params.id!, req.user!.id);
@@ -157,7 +184,6 @@ export function createTripsRouter(prisma: PrismaClient, notifier?: Notifier): Ro
   router.delete(
     '/:id',
     requireAuth,
-    requireRole('driver'),
     validate({ params: TripIdParam }),
     asyncHandler(async (req, res) => {
       const reason = typeof req.body?.reason === 'string' ? (req.body.reason as string) : undefined;

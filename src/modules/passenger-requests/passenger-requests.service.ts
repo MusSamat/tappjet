@@ -156,7 +156,15 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
           departureDate: { gte: now },
           ...(fromNames ? { originCity: { in: fromNames } } : {}),
           ...(toNames ? { destinationCity: { in: toNames } } : {}),
-          ...(input.date ? { departureDate: { gte: new Date(input.date) } } : {}),
+          // Single-day window (same semantics as the trips search «Сегодня» chip).
+          ...(input.date
+            ? {
+                departureDate: {
+                  gte: new Date(input.date),
+                  lt: new Date(new Date(input.date).getTime() + 24 * 60 * 60 * 1000),
+                },
+              }
+            : {}),
           ...(input.seats ? { seatsNeeded: { gte: input.seats } } : {}),
         },
         orderBy: [{ departureDate: 'asc' }, { createdAt: 'desc' }],
@@ -384,6 +392,9 @@ export function createPassengerRequestResponsesService(prisma: PrismaClient, not
     if (!request) throw Errors.notFound('PassengerRequest');
     if (request.status !== 'open') throw Errors.conflict('Request is not open');
     if (request.passengerId === driverId) throw Errors.validation({ reason: 'cannot_respond_to_own_request' });
+    // Phase 1: responding as a driver requires a car (not verification).
+    const hasCar = await prisma.car.count({ where: { userId: driverId, deletedAt: null } });
+    if (hasCar === 0) throw Errors.conflict('Add a car before responding', { reason: 'no_car' });
 
     const departureTime = new Date(input.departureTime);
     if (departureTime <= new Date()) throw Errors.validation({ departureTime: 'must be in the future' });

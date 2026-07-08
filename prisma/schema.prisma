@@ -53,6 +53,7 @@ model User {
   refreshTokens       RefreshToken[]
   authProviders       AuthProvider[]
   notifications       Notification[]
+  cars                Car[]
   complaintsReported  Complaint[]          @relation("ComplaintReporter")
   complaintsTargeting Complaint[]          @relation("ComplaintTargetUser")
   loyaltyTransactions LoyaltyTransaction[]
@@ -109,6 +110,9 @@ model DriverProfile {
 model Trip {
   id                   String    @id @default(uuid()) @db.Uuid
   driverId             String    @map("driver_id") @db.Uuid
+  // The car this trip rides on (Phase 1 multi-auto). Nullable for legacy trips
+  // created before the cars table — their car falls back to driver_profiles.
+  carId                String?   @map("car_id") @db.Uuid
   originCity           String    @map("origin_city") @db.VarChar(50)
   destinationCity      String    @map("destination_city") @db.VarChar(50)
   originAddress        String    @map("origin_address") @db.VarChar(200)
@@ -140,6 +144,7 @@ model Trip {
   version              Int       @default(1)
 
   driver   User      @relation("TripDriver", fields: [driverId], references: [id])
+  car      Car?      @relation(fields: [carId], references: [id], onDelete: SetNull)
   bookings Booking[]
   ratings  Rating[]
 
@@ -394,6 +399,46 @@ model Admin {
   actions AdminAction[]
 
   @@map("admins")
+}
+
+// ─── Cars (Phase 1: publish without verification) ─────────────────────
+// A user owns any number of cars; a trip references the one it rides on.
+// Verification stays on DriverProfile as an OPTIONAL badge — it no longer
+// gates publishing.
+model Car {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  make       String    @db.VarChar(50)
+  model      String    @db.VarChar(50)
+  color      String?   @db.VarChar(30)
+  plate      String    @db.VarChar(15)
+  seatsCount Int       @default(4) @map("seats_count") @db.SmallInt
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trips Trip[]
+
+  @@index([userId])
+  @@map("cars")
+}
+
+// ─── Phone-reveal audit («Позвонить» taps) ────────────────────────────
+// Every reveal of a user's phone number is logged: who saw whose number,
+// in which context (trip / passenger_request). Powers the daily rate limit
+// (anti-scraping) and abuse investigations. Plain UUIDs (AdminAction style).
+model ContactReveal {
+  id           String   @id @default(uuid()) @db.Uuid
+  viewerId     String   @map("viewer_id") @db.Uuid
+  targetUserId String   @map("target_user_id") @db.Uuid
+  contextType  String   @map("context_type") @db.VarChar(30) // trip | passenger_request
+  contextId    String   @map("context_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([viewerId, contextType, contextId])
+  @@index([viewerId, createdAt])
+  @@index([targetUserId])
+  @@map("contact_reveals")
 }
 
 // ─── Admin actions audit log ──────────────────────────────────────────

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { PrismaClient } from '@prisma/client';
 import type { Notifier } from '@/lib/notifier.js';
 import { createPassengerRequestsService, createPassengerRequestResponsesService } from './passenger-requests.service.js';
+import { createContactsService } from '../contacts/contacts.service.js';
 import {
   CreatePassengerRequestBody,
   ListRequestsQuery,
@@ -19,6 +20,7 @@ export function createPassengerRequestsRouter(prisma: PrismaClient, notifier: No
   const router = Router();
   const service = createPassengerRequestsService(prisma);
   const responsesService = createPassengerRequestResponsesService(prisma, notifier);
+  const contacts = createContactsService(prisma);
 
   // GET /passenger-requests — open requests list (public, drivers browse)
   router.get(
@@ -41,6 +43,18 @@ export function createPassengerRequestsRouter(prisma: PrismaClient, notifier: No
     asyncHandler(async (req, res) => {
       const result = await service.listMy(req.user!.id);
       res.json(result);
+    }),
+  );
+
+  // POST /passenger-requests/:id/contact — reveal the passenger's phone
+  // («Позвонить»). Auth-gated + audited + daily-limited.
+  router.post(
+    '/:id/contact',
+    requireAuth,
+    validate({ params: RequestIdParam }),
+    asyncHandler(async (req, res) => {
+      const contact = await contacts.revealForRequest(req.params.id!, req.user!.id);
+      res.json(contact);
     }),
   );
 

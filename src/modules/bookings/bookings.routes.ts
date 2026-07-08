@@ -11,7 +11,7 @@ import {
 } from './bookings.schemas.js';
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
-import { requireAuth, requirePhone, requireRole } from '@/middleware/auth.js';
+import { requireAuth, requirePhone } from '@/middleware/auth.js';
 import { bookingCreateLimit } from '@/middleware/rateLimit.js';
 import type { Notifier } from '@/lib/notifier.js';
 
@@ -53,7 +53,6 @@ export function createBookingsRouter(prisma: PrismaClient, notifier: Notifier): 
   router.get(
     '/incoming',
     requireAuth,
-    requireRole('driver'),
     validate({ query: IncomingBookingsQuery }),
     asyncHandler(async (req, res) => {
       const result = await service.listIncoming(
@@ -81,7 +80,6 @@ export function createBookingsRouter(prisma: PrismaClient, notifier: Notifier): 
   router.patch(
     '/:id/accept',
     requireAuth,
-    requireRole('driver'),
     validate({ params: BookingIdParam }),
     asyncHandler(async (req, res) => {
       const updated = await service.accept(req.params.id!, req.user!.id);
@@ -92,7 +90,6 @@ export function createBookingsRouter(prisma: PrismaClient, notifier: Notifier): 
   router.patch(
     '/:id/reject',
     requireAuth,
-    requireRole('driver'),
     validate({ params: BookingIdParam, body: BookingRejectBody }),
     asyncHandler(async (req, res) => {
       const { reason } = (req.body ?? {}) as { reason?: string };
@@ -118,7 +115,6 @@ export function createBookingsRouter(prisma: PrismaClient, notifier: Notifier): 
   router.patch(
     '/:id/no-show',
     requireAuth,
-    requireRole('driver'),
     validate({ params: BookingIdParam }),
     asyncHandler(async (req, res) => {
       const updated = await service.noShow(req.params.id!, req.user!.id);

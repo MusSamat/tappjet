@@ -42,6 +42,7 @@ export function createLikesService(prisma: PrismaClient) {
         const rows = await prisma.trip.findMany({
           where: { id: { in: ids } },
           include: {
+            car: true,
             driver: {
               select: {
                 id: true,

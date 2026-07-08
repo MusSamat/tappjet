@@ -420,13 +420,15 @@ export async function startTelegramBot(
 
   await bot.api
     .setMyCommands([
-      { command: 'start', description: 'Начать' },
-      { command: 'help', description: 'Помощь' },
-      { command: 'mytrips', description: 'Мои поездки' },
-      { command: 'support', description: 'Поддержка' },
-      { command: 'lang', description: 'Сменить язык' },
-      { command: 'unsubscribe', description: 'Отписаться от уведомлений' },
-      { command: 'subscribe', description: 'Подписаться на уведомления' },
+      { command: 'start', description: '🏠 Главное меню' },
+      { command: 'find', description: '🔍 Найти поездку' },
+      { command: 'publish', description: '➕ Опубликовать поездку' },
+      { command: 'my', description: '📋 Мои поездки и брони' },
+      { command: 'help', description: 'ℹ️ Как это работает' },
+      { command: 'lang', description: '🌐 Язык / Тил' },
+      { command: 'support', description: '💬 Поддержка' },
+      { command: 'unsubscribe', description: '🔕 Отключить уведомления' },
+      { command: 'subscribe', description: '🔔 Включить уведомления' },
     ])
     .catch((err: unknown) => logger.warn({ err }, 'setMyCommands failed'));
 
@@ -482,16 +484,7 @@ export async function startTelegramBot(
         }))
       : false;
 
-    // Driver role is granted only on admin verification, so `roles` includes
-    // 'driver' iff the user is a verified driver — the signal that gates the
-    // «Найти пассажира» action (browse passenger requests to respond to).
-    const dbUser = ctx.from
-      ? await prisma.user.findFirst({
-          where: { telegramId: BigInt(ctx.from.id) },
-          select: { roles: true },
-        })
-      : null;
-    const isDriver = dbUser?.roles?.includes('driver') ?? false;
+
 
     const greeting = isReturning
       ? `👋 С возвращением, <b>${firstName}</b>!`
@@ -506,16 +499,15 @@ export async function startTelegramBot(
       `💬 Встроенный чат\n` +
       `📱 Работает прямо в Telegram`;
 
+    // Phase 1: no roles — one clear action set for everyone. Publishing asks
+    // for a car inside the form, no verification needed.
     const kb = new InlineKeyboard();
     if (MINI_APP_HTTPS) {
-      // Passengers & everyone: browse driver trips. Verified drivers also get
-      // «Найти пассажира» (→ requests); non-drivers are nudged to get verified.
-      kb.webApp('🔍 Найти поездку', miniAppUrl('/trips')).row();
-      if (isDriver) {
-        kb.webApp('🧍 Найти пассажира', miniAppUrl('/requests')).row();
-      } else {
-        kb.webApp('🚗 Стать водителем', miniAppUrl('/profile/driver')).row();
-      }
+      kb.webApp('🔍 Найти поездку', miniAppUrl('/trips'))
+        .webApp('🧍 Найти пассажира', miniAppUrl('/requests'))
+        .row();
+      kb.webApp('➕ Опубликовать поездку', miniAppUrl('/trips/create')).row();
+      kb.webApp('📋 Мои поездки и брони', miniAppUrl('/my/bookings')).row();
     }
     kb.text('🌐 Язык', 'lang').text('🔔 Уведомления', 'notify').row();
     kb.text('ℹ️ Помощь', 'help');
@@ -630,6 +622,27 @@ export async function startTelegramBot(
       });
     }
   });
+
+  // Single-purpose commands — each answers with one clear web-app button so
+  // first-timers never have to type or guess anything.
+  const linkCommand = (text: string, btn: string, path: string) => async (ctx: Context) => {
+    const kb = MINI_APP_HTTPS
+      ? new InlineKeyboard().webApp(btn, miniAppUrl(path))
+      : undefined;
+    await ctx.reply(text, kb ? { reply_markup: kb } : undefined);
+  };
+  bot.command('find', linkCommand(
+    'Куда едем? Нажмите кнопку — увидите все поездки по вашему маршруту.',
+    '🔍 Найти поездку', '/trips',
+  ));
+  bot.command('publish', linkCommand(
+    'Едете сами и есть свободные места? Опубликуйте поездку за 30 секунд — пассажиры позвонят напрямую.',
+    '➕ Опубликовать поездку', '/trips/create',
+  ));
+  bot.command('my', linkCommand(
+    'Ваши объявления, брони и избранное — в одном месте.',
+    '📋 Открыть «Мои»', '/my/bookings',
+  ));
 
   bot.command('help', (ctx: Context) =>
     ctx.reply(

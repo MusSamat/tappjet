@@ -85,6 +85,7 @@ export interface TripsService {
   ): Promise<{ data: TripListItem[]; nextCursor: string | null; nearby?: boolean }>;
   getById(id: string, viewerId?: string | null): Promise<TripDetail>;
   patch(id: string, driverUserId: string, patch: TripPatchInput): Promise<TripDetail>;
+  adjustSeats(id: string, driverUserId: string, delta: 1 | -1): Promise<TripDetail>;
   cancel(id: string, driverUserId: string, reason?: string): Promise<{ status: 'cancelled' }>;
   complete(id: string, driverUserId: string): Promise<{ status: 'completed' }>;
   myTrips(
@@ -150,22 +151,25 @@ export function createTripsService(
       return { trip: await getById(existing.id), reused: true };
     }
 
-    const [, driver] = await Promise.all([
-      assertActiveUser(driverUserId, prisma),
-      prisma.driverProfile.findUnique({ where: { userId: driverUserId } }),
-    ]);
-    if (!driver) throw Errors.forbidden({ reason: 'not_a_driver' });
-    if (driver.verificationStatus !== 'verified') {
-      throw Errors.forbidden({
-        reason: 'driver_not_verified',
-        current_status: driver.verificationStatus,
-      });
+    // Phase 1: publishing needs a CAR, not verification. Verification stays an
+    // optional badge (driver_profiles) — it никогда больше не гейтит публикацию.
+    await assertActiveUser(driverUserId, prisma);
+    const car = body.carId
+      ? await prisma.car.findFirst({
+          where: { id: body.carId, userId: driverUserId, deletedAt: null },
+        })
+      : await prisma.car.findFirst({
+          where: { userId: driverUserId, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        });
+    if (!car) {
+      throw Errors.conflict('Add a car before publishing', { reason: 'no_car' });
     }
-    if (body.seatsTotal > driver.seatsCount) {
+    if (body.seatsTotal > car.seatsCount) {
       throw Errors.validation({
         reason: 'seats_exceed_vehicle',
         requested: body.seatsTotal,
-        vehicle: driver.seatsCount,
+        vehicle: car.seatsCount,
       });
     }
 
@@ -218,6 +222,7 @@ export function createTripsService(
       const created = await prisma.trip.create({
         data: {
           driverId: driverUserId,
+          carId: car.id,
           originCity: body.originCity,
           destinationCity: body.destinationCity,
           originAddress: body.originAddress,
@@ -327,8 +332,22 @@ export function createTripsService(
       };
     }
     if (query.luggage) where.luggage = query.luggage;
-    if (query.only_verified) {
-      where.driver = { driverProfile: { verificationStatus: 'verified' } };
+    if (query.only_verified || query.min_rating) {
+      where.driver = {
+        ...(query.only_verified ? { driverProfile: { verificationStatus: 'verified' } } : {}),
+        ...(query.min_rating ? { rating: { gte: query.min_rating } } : {}),
+      };
+    }
+    // Preference filters live in the trips.preferences Json column
+    // (create() stores {clean, music, smoking, ac, animals, quiet, chat, women_only}).
+    {
+      const prefFilters: Prisma.TripWhereInput[] = [];
+      if (query.no_smoking) prefFilters.push({ preferences: { path: ['smoking'], equals: false } });
+      if (query.pets) prefFilters.push({ preferences: { path: ['animals'], equals: true } });
+      if (query.women_only) prefFilters.push({ preferences: { path: ['women_only'], equals: true } });
+      if (prefFilters.length > 0) {
+        where.AND = [...((where.AND as Prisma.TripWhereInput[] | undefined) ?? []), ...prefFilters];
+      }
     }
 
     // Loyalty tier priority: elite → expert → traveler → novice — prepended to
@@ -352,6 +371,7 @@ export function createTripsService(
         orderBy,
         ...cursorArgs({ cursor: query.cursor, limit: query.limit }),
         include: {
+          car: true,
           driver: {
             select: {
               id: true,
@@ -408,6 +428,7 @@ export function createTripsService(
     const row = await prisma.trip.findUnique({
       where: { id },
       include: {
+        car: true,
         driver: {
           select: {
             id: true,
@@ -491,6 +512,52 @@ export function createTripsService(
     }
 
     await prisma.trip.update({ where: { id }, data });
+    return getById(id);
+  }
+
+  // ─── Manual seats adjust («занято по телефону» / «освободилось») ─────
+  // Invariants: 0 ≤ available + delta ≤ total − accepted-on-platform seats.
+  // Seats held by accepted bookings can only be freed by cancelling the
+  // booking explicitly (which notifies the passenger) — never by this knob.
+  async function adjustSeats(
+    id: string,
+    driverUserId: string,
+    delta: 1 | -1,
+  ): Promise<TripDetail> {
+    await prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<
+        Array<{ driver_id: string; status: string; seats_total: number; seats_available: number }>
+      >`
+        SELECT driver_id, status, seats_total, seats_available
+        FROM trips WHERE id = ${id}::uuid FOR UPDATE
+      `;
+      const trip = locked[0];
+      if (!trip) throw Errors.notFound('Trip');
+      if (trip.driver_id !== driverUserId) throw Errors.forbidden({ reason: 'not_owner' });
+      if (trip.status !== 'active') {
+        throw Errors.conflict('Trip is not active', { current_status: trip.status });
+      }
+
+      const accepted = await tx.$queryRaw<Array<{ n: number }>>`
+        SELECT COALESCE(SUM(seats_count), 0)::int AS n
+        FROM bookings WHERE trip_id = ${id}::uuid AND status = 'accepted'
+      `;
+      const acceptedSeats = accepted[0]?.n ?? 0;
+      const next = trip.seats_available + delta;
+      const max = trip.seats_total - acceptedSeats;
+      if (next < 0 || next > max) {
+        throw Errors.conflict('Seats out of range', {
+          reason: 'seats_out_of_range',
+          seats_available: trip.seats_available,
+          max_available: max,
+        });
+      }
+
+      await tx.trip.update({
+        where: { id },
+        data: { seatsAvailable: next, version: { increment: 1 } },
+      });
+    });
     return getById(id);
   }
 
@@ -590,6 +657,7 @@ export function createTripsService(
       orderBy: [orderBy, { id: 'asc' }],
       ...cursorArgs({ cursor: query.cursor, limit: query.limit }),
       include: {
+        car: true,
         driver: {
           select: {
             id: true,
@@ -763,6 +831,7 @@ export function createTripsService(
     search,
     getById,
     patch,
+    adjustSeats,
     cancel,
     complete,
     myTrips,
@@ -777,6 +846,7 @@ export function createTripsService(
 // ─── Internal helpers ─────────────────────────────────────────────────
 export type TripRow = Prisma.TripGetPayload<{
   include: {
+    car: true;
     driver: {
       select: {
         id: true;
@@ -815,15 +885,25 @@ export function toListItem(
         row.driver.ratingCount >= RATING_VISIBLE_AFTER ? Number(row.driver.rating) : null,
       ratingCount: row.driver.ratingCount,
       verified: dp?.verificationStatus === 'verified',
-      car: dp
+      // Trip's own car first (Phase 1 multi-auto); legacy trips fall back to
+      // the verification profile's vehicle.
+      car: row.car
         ? {
-            make: dp.carMake,
-            model: dp.carModel,
-            color: dp.carColor,
-            plate: dp.carPlate,
-            photoUrl: toFileUrl(dp.carPhotoPath),
+            make: row.car.make,
+            model: row.car.model,
+            color: row.car.color ?? '',
+            plate: row.car.plate,
+            photoUrl: null,
           }
-        : null,
+        : dp
+          ? {
+              make: dp.carMake,
+              model: dp.carModel,
+              color: dp.carColor,
+              plate: dp.carPlate,
+              photoUrl: toFileUrl(dp.carPhotoPath),
+            }
+          : null,
     },
     originCity: row.originCity,
     destinationCity: row.destinationCity,

@@ -23,6 +23,8 @@ export const TripCreateBody = z
   .object({
     originCity: CityName,
     destinationCity: CityName,
+    // Which of the user's cars rides this trip; omitted → newest car.
+    carId: z.string().uuid().optional(),
     originAddress: z.string().trim().min(1).max(200),
     originLat: z.number().min(-90).max(90).optional(),
     originLng: z.number().min(-180).max(180).optional(),
@@ -37,10 +39,21 @@ export const TripCreateBody = z
     pricePerSeat: z.coerce.number().int().min(50).max(10_000),
     priceNegotiable: z.boolean().default(false),
     luggage: z.enum(['yes', 'small', 'no']).default('no'),
+    // Full key set the clients actually send (web maps no_smoking→smoking,
+    // pets→animals). Unknown keys used to be silently stripped, which left
+    // trips without the data the search filters need.
     preferences: z
       .object({
-        silence: z.boolean().optional(),
+        clean: z.boolean().optional(),
         music: z.boolean().optional(),
+        smoking: z.boolean().optional(),
+        ac: z.boolean().optional(),
+        animals: z.boolean().optional(),
+        quiet: z.boolean().optional(),
+        chat: z.boolean().optional(),
+        women_only: z.boolean().optional(),
+        // legacy client keys
+        silence: z.boolean().optional(),
         no_smoking: z.boolean().optional(),
       })
       .partial()
@@ -83,6 +96,19 @@ export const TripSearchQuery = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  min_rating: z.coerce.number().min(0).max(5).optional(),
+  women_only: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  no_smoking: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  pets: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   luggage: z.enum(['yes', 'small', 'no']).optional(),
   sort: z.enum(['time', 'price_asc', 'rating_desc']).default('time'),
   // Plain uuid, or 'nb_'-prefixed uuid when paginating the same-raion
@@ -115,6 +141,13 @@ export const TripPatchBody = z
   .strict();
 
 export type TripPatchInput = z.infer<typeof TripPatchBody>;
+
+// Manual seat adjust («занято по телефону» / «место освободилось») — call-first
+// reality: deals happen over the phone, the driver keeps availability honest.
+export const SeatsAdjustBody = z.object({
+  delta: z.union([z.literal(1), z.literal(-1)]),
+});
+export type SeatsAdjustInput = z.infer<typeof SeatsAdjustBody>;
 
 export const MyTripsQuery = z.object({
   tab: z.enum(['active', 'in_transit', 'past', 'cancelled']).default('active'),
