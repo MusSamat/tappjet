@@ -15,6 +15,7 @@ import {
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
 import { optionalAuth, requireAuth, requirePhone } from '@/middleware/auth.js';
+import { requestCreateLimit } from '@/middleware/rateLimit.js';
 
 export function createPassengerRequestsRouter(prisma: PrismaClient, notifier: Notifier): Router {
   const router = Router();
@@ -121,6 +122,7 @@ export function createPassengerRequestsRouter(prisma: PrismaClient, notifier: No
     '/',
     requireAuth,
     requirePhone,
+    requestCreateLimit,
     validate({ body: CreatePassengerRequestBody }),
     asyncHandler(async (req, res) => {
       const result = await service.create(

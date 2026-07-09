@@ -17,9 +17,13 @@ import { Errors } from '@/lib/errors.js';
 type BuildOpts = Pick<Options, 'windowMs' | 'limit'> & {
   name: string;
   keyGenerator?: (req: Request) => string;
+  /** Only count 2xx responses — a failed attempt (validation/conflict/500) must
+   *  NOT burn the user's quota. Used on create limiters so real-world typos or
+   *  transient errors don't lock someone out with nothing actually created. */
+  skipFailedRequests?: boolean;
 };
 
-function build({ name, windowMs, limit, keyGenerator }: BuildOpts): RequestHandler {
+function build({ name, windowMs, limit, keyGenerator, skipFailedRequests }: BuildOpts): RequestHandler {
   if (env.RATE_LIMIT_DISABLED) return (_req, _res, next) => next();
 
   return rateLimit({
@@ -28,6 +32,7 @@ function build({ name, windowMs, limit, keyGenerator }: BuildOpts): RequestHandl
     standardHeaders: 'draft-7', // RateLimit-* headers (TZ §19.1)
     legacyHeaders: false,
     keyGenerator: keyGenerator ?? ipKey,
+    ...(skipFailedRequests ? { skipFailedRequests: true } : {}),
     handler: (_req, _res, next) => {
       next(Errors.rateLimited({ bucket: name }));
     },
@@ -35,11 +40,13 @@ function build({ name, windowMs, limit, keyGenerator }: BuildOpts): RequestHandl
 }
 
 // ─── IP-based ─────────────────────────────────────────────────────────
-/** TZ §7.3 "Все эндпоинты · 100 запросов в минуту на IP". */
+// Coarse DoS safety-net only. Kept generous on purpose: in KG many real users
+// share ONE public IP via carrier-grade NAT, so a tight per-IP cap would 429
+// legitimate traffic. Meaningful throttling is per-user (see below).
 export const globalIpLimit = build({
   name: 'global_ip',
   windowMs: 60_000,
-  limit: 100,
+  limit: 300,
 });
 
 /** TZ §7.3 "POST /auth/telegram · 10 запросов в минуту на IP". */
@@ -98,18 +105,29 @@ export const complaintSubmitLimit = build({
 // requireAuth in the middleware chain (req.user is populated by then).
 const userKey = (req: Request): string => req.user?.id ?? ipKey(req);
 
-/** TZ §7.3 "POST /trips · 5 поездок в час на driver user_id" (anti-flood). */
+/** Anti-flood: successful trips per hour per driver. Failed attempts don't count. */
 export const tripCreateLimit = build({
   name: 'trip_create',
   windowMs: 60 * 60_000,
-  limit: 5,
+  limit: 10,
   keyGenerator: userKey,
+  skipFailedRequests: true,
 });
 
-/** TZ §7.3 "POST /bookings · 20 бронирований в час на passenger user_id" (anti-spam). */
+/** Anti-spam: successful passenger requests per hour per user. Failed don't count. */
+export const requestCreateLimit = build({
+  name: 'request_create',
+  windowMs: 60 * 60_000,
+  limit: 20,
+  keyGenerator: userKey,
+  skipFailedRequests: true,
+});
+
+/** Anti-spam: successful bookings per hour per passenger. Failed don't count. */
 export const bookingCreateLimit = build({
   name: 'booking_create',
   windowMs: 60 * 60_000,
   limit: 20,
   keyGenerator: userKey,
+  skipFailedRequests: true,
 });
