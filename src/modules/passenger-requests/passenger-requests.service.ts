@@ -32,7 +32,78 @@ export interface PassengerRequestDTO {
   };
 }
 
+// Browse card DTO — a strict subset of PassengerRequestDTO carrying only what
+// the request card renders. The detail (getById) still returns the full DTO
+// (comment, metrics), fetched when a card opens. Keep in sync with the web
+// RequestCard component and the PassengerRequestCardItem OpenAPI schema.
+export interface PassengerRequestCardItem {
+  id: string;
+  passengerId: string;
+  originCity: string;
+  destinationCity: string;
+  seatsNeeded: number;
+  departureDate: string;
+  flexible: boolean;
+  status: string;
+  liked: boolean;
+  myResponse: { id: string; status: string } | null;
+  passenger: {
+    id: string;
+    name: string;
+    avatarUrl: string | null;
+    rating: number | null;
+    ratingCount: number;
+  };
+}
+
 const RATING_VISIBLE_AFTER = 3;
+
+// Lean projection for browse cards — a strict subset of toDTO.
+export function toCardItem(
+  row: {
+    id: string;
+    passengerId: string;
+    originCity: string;
+    destinationCity: string;
+    seatsNeeded: number;
+    departureDate: Date;
+    flexible: boolean;
+    status: string;
+    passenger: {
+      id: string;
+      name: string;
+      avatarUrl: string | null;
+      rating: { toNumber: () => number } | number;
+      ratingCount: number;
+    };
+  },
+  opts: { liked: boolean; myResponse?: { id: string; status: string } | null },
+): PassengerRequestCardItem {
+  return {
+    id: row.id,
+    passengerId: row.passengerId,
+    originCity: row.originCity,
+    destinationCity: row.destinationCity,
+    seatsNeeded: row.seatsNeeded,
+    departureDate: row.departureDate.toISOString(),
+    flexible: row.flexible,
+    status: row.status,
+    liked: opts.liked,
+    myResponse: opts.myResponse ?? null,
+    passenger: {
+      id: row.passenger.id,
+      name: row.passenger.name,
+      avatarUrl: toFileUrl(row.passenger.avatarUrl),
+      rating:
+        row.passenger.ratingCount >= RATING_VISIBLE_AFTER
+          ? typeof row.passenger.rating === 'number'
+            ? row.passenger.rating
+            : row.passenger.rating.toNumber()
+          : null,
+      ratingCount: row.passenger.ratingCount,
+    },
+  };
+}
 
 export function toDTO(
   row: {
@@ -159,7 +230,7 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
   async function list(
     input: ListRequestsInput,
     viewerId: string | null = null,
-  ): Promise<{ data: PassengerRequestDTO[]; nextCursor: string | null; nearby?: boolean }> {
+  ): Promise<{ data: PassengerRequestCardItem[]; nextCursor: string | null; nearby?: boolean }> {
     const take = input.limit + 1;
     const now = new Date();
 
@@ -231,9 +302,10 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     const respByRequest = new Map(myResponses.map((r) => [r.requestId, { id: r.id, status: r.status }]));
     return {
       data: slice.map((r) =>
-        // Browse cards are info-lean — no phone-request counter — so skip the
-        // per-page contactReveal groupBy. The detail still computes real counts.
-        toDTO(r, {
+        // Info-lean card DTO: only the fields the request card renders (no
+        // comment, no metrics, no createdAt). No per-page contactReveal groupBy
+        // either. Full data comes from the detail (getById) when a card opens.
+        toCardItem(r, {
           liked: likedSet.has(r.id),
           myResponse: respByRequest.get(r.id) ?? null,
         }),
@@ -251,21 +323,9 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     });
     const likedSet = await engagement.likedIds('passenger_request', rows.map((r) => r.id), passengerId);
     return {
-      data: await (async () => {
-        const reveals = await prisma.contactReveal.groupBy({
-          by: ['contextId'],
-          where: { contextType: 'passenger_request', contextId: { in: rows.map((r) => r.id) } },
-          _count: { _all: true },
-        });
-        const revealMap = new Map(reveals.map((c) => [c.contextId, c._count._all]));
-        return rows.map((r) =>
-          toDTO(r, {
-            liked: likedSet.has(r.id),
-            contacts: revealMap.get(r.id) ?? 0,
-            myResponse: null,
-          }),
-        );
-      })(),
+      // Owner list feeds the lean request card too — no metrics rendered, so no
+      // contactReveal groupBy. Full detail is fetched on open.
+      data: rows.map((r) => toDTO(r, { liked: likedSet.has(r.id), myResponse: null })),
       nextCursor: null,
     };
   }
