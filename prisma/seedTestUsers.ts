@@ -157,12 +157,16 @@ async function seed(): Promise<void> {
   const trips: Prisma.TripCreateManyInput[] = [];
   const requests: Prisma.PassengerRequestCreateManyInput[] = [];
 
-  for (const userId of userIds) {
+  userIds.forEach((userId, uIdx) => {
     for (let d = 0; d < DAYS; d++) {
       ROUTES.forEach((r, rIdx) => {
         const kgHour = 7 + rIdx;                 // 07:00 .. 16:00 KG — all same KG day
         const seatsTotal = 3 + (rIdx % 2);       // 3 or 4
-        const seatsAvailable = (d + rIdx) % (seatsTotal + 1); // includes some sold-out (0)
+        // ALWAYS >= 1 free seat: search filters `seatsAvailable >= seats`
+        // (default 1), so a 0 here hides the trip. The old (d+rIdx)%(n+1)
+        // formula zeroed a whole route-day for every user → «trips exist but
+        // the list is empty». Vary by user for realistic differing counts.
+        const seatsAvailable = 1 + ((uIdx + d + rIdx) % seatsTotal);
         trips.push({
           driverId: userId,
           originCity: r.origin,
@@ -189,7 +193,7 @@ async function seed(): Promise<void> {
         });
       });
     }
-  }
+  });
 
   const nTrips = await chunkedCreateMany(trips, (b) =>
     prisma.trip.createMany({ data: b }),
