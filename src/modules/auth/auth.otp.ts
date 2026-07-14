@@ -151,7 +151,10 @@ export async function handleBotLoginToken(
     where: { token },
     data: { status: 'done', userId: user.id },
   });
-  await bot.api.sendMessage(telegramId, '✅ Вы вошли в Tappjet! Вернитесь в приложение.');
+  await bot.api.sendMessage(
+    telegramId,
+    '✅ Вы вошли! Вернитесь в браузер — через пару секунд вы окажетесь внутри.',
+  );
   return 'logged_in';
 }
 
