@@ -162,11 +162,12 @@ async function seed(): Promise<void> {
       ROUTES.forEach((r, rIdx) => {
         const kgHour = 7 + rIdx;                 // 07:00 .. 16:00 KG — all same KG day
         const seatsTotal = 3 + (rIdx % 2);       // 3 or 4
-        // ALWAYS >= 1 free seat: search filters `seatsAvailable >= seats`
-        // (default 1), so a 0 here hides the trip. The old (d+rIdx)%(n+1)
-        // formula zeroed a whole route-day for every user → «trips exist but
-        // the list is empty». Vary by user for realistic differing counts.
-        const seatsAvailable = 1 + ((uIdx + d + rIdx) % seatsTotal);
+        // Realistic sold-out on INDIVIDUAL trips, keyed on the user so it
+        // spreads across the 20 drivers: ~1 in 6 (≈3 of 20) on any given
+        // route-day sells out, the rest stay bookable — the list is never
+        // empty. (The earlier all-users formula zeroed a whole route-day.)
+        const soldOut = (uIdx * 31 + d * 7 + rIdx) % 6 === 0;
+        const seatsAvailable = soldOut ? 0 : 1 + ((uIdx + d + rIdx) % seatsTotal);
         trips.push({
           driverId: userId,
           originCity: r.origin,
