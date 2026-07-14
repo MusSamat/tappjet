@@ -58,6 +58,33 @@ export interface TripListItem {
   metrics: { views: number; likes: number; contacts: number };
 }
 
+// Search/browse card — a deliberate subset of TripListItem carrying only what
+// the ride card renders. The detail (getById) still returns the full
+// TripListItem/TripDetail, fetched on open. Keep this in sync with the web
+// TripCard component and the TripCardItem OpenAPI schema.
+export interface TripCardItem {
+  id: string;
+  driverId: string;
+  driver: {
+    id: string;
+    name: string;
+    avatarUrl: string | null;
+    rating: number | null;
+    ratingCount: number;
+    verified: boolean;
+    car: { make: string; model: string } | null;
+  };
+  originCity: string;
+  destinationCity: string;
+  pickupCities: string[];
+  departureAt: Date;
+  departureWindowEnd: Date | null;
+  seatsAvailable: number;
+  pricePerSeat: number;
+  status: string;
+  liked: boolean;
+}
+
 export interface TripDetail extends TripListItem {
   comment: string | null;
   // The viewer's own active booking on this trip (guards double-booking in UI).
@@ -84,7 +111,7 @@ export interface TripsService {
   search(
     query: TripSearchInput,
     viewerId?: string | null,
-  ): Promise<{ data: TripListItem[]; nextCursor: string | null; nearby?: boolean }>;
+  ): Promise<{ data: TripCardItem[]; nextCursor: string | null; nearby?: boolean }>;
   getById(id: string, viewerId?: string | null): Promise<TripDetail>;
   patch(id: string, driverUserId: string, patch: TripPatchInput): Promise<TripDetail>;
   adjustSeats(id: string, driverUserId: string, delta: 1 | -1): Promise<TripDetail>;
@@ -276,7 +303,7 @@ export function createTripsService(
   async function search(
     query: TripSearchInput,
     viewerId: string | null = null,
-  ): Promise<{ data: TripListItem[]; nextCursor: string | null; nearby?: boolean }> {
+  ): Promise<{ data: TripCardItem[]; nextCursor: string | null; nearby?: boolean }> {
     if (query.from_city && query.to_city && query.from_city === query.to_city) {
       throw Errors.validation({ reason: 'cities_must_differ' });
     }
@@ -428,10 +455,10 @@ export function createTripsService(
     }
 
     const likedSet = await engagement.likedIds('trip', rows.map((r) => r.id), viewerId);
-    // Search cards are info-lean — they don't show the phone-request counter, so
-    // skip the per-page contactReveal groupBy (a whole aggregation query saved
-    // on the hottest endpoint). The detail (getById) still computes real counts.
-    const mapped = rows.map((r) => toListItem(r, { liked: likedSet.has(r.id) }));
+    // Info-lean card DTO: only the fields the ride card renders (no metrics,
+    // no dropoff/address/luggage/seatsTotal, car = make+model). No per-page
+    // contactReveal groupBy either. Full data comes from the detail on open.
+    const mapped = rows.map((r) => toCardItem(r, { liked: likedSet.has(r.id) }));
     const page = sliceAndNext(mapped, query.limit);
     if (!nearby) return page;
     return {
@@ -900,6 +927,39 @@ export type TripRow = Prisma.TripGetPayload<{
     };
   };
 }>;
+
+// Lean projection for search/browse cards — a strict subset of toListItem.
+export function toCardItem(row: TripRow, opts: { liked: boolean }): TripCardItem {
+  const dp = row.driver.driverProfile;
+  const car = row.car
+    ? { make: row.car.make, model: row.car.model }
+    : dp
+      ? { make: dp.carMake, model: dp.carModel }
+      : null;
+  return {
+    id: row.id,
+    driverId: row.driverId,
+    driver: {
+      id: row.driver.id,
+      name: row.driver.name,
+      avatarUrl: toFileUrl(row.driver.avatarUrl),
+      rating:
+        row.driver.ratingCount >= RATING_VISIBLE_AFTER ? Number(row.driver.rating) : null,
+      ratingCount: row.driver.ratingCount,
+      verified: dp?.verificationStatus === 'verified',
+      car,
+    },
+    originCity: row.originCity,
+    destinationCity: row.destinationCity,
+    pickupCities: row.pickupCities,
+    departureAt: row.departureAt,
+    departureWindowEnd: row.departureWindowEnd,
+    seatsAvailable: row.seatsAvailable,
+    pricePerSeat: row.pricePerSeat,
+    status: row.status,
+    liked: opts.liked,
+  };
+}
 
 export function toListItem(
   row: TripRow,

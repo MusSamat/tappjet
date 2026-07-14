@@ -235,6 +235,43 @@ export const openapiDocument = {
       },
 
       // ─── Trip ─────────────────────────────────────────────────────
+      // Lean card DTO returned by GET /trips (search/browse). Full trip data is
+      // served by GET /trips/{id} (TripDetail), fetched when a card is opened.
+      TripCardItem: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          driverId: { type: 'string', format: 'uuid' },
+          driver: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', format: 'uuid' },
+              name: { type: 'string' },
+              avatarUrl: { type: 'string', nullable: true },
+              rating: { type: 'number', nullable: true },
+              ratingCount: { type: 'integer' },
+              verified: { type: 'boolean' },
+              car: {
+                type: 'object',
+                nullable: true,
+                properties: {
+                  make: { type: 'string' },
+                  model: { type: 'string' },
+                },
+              },
+            },
+          },
+          originCity: { type: 'string' },
+          destinationCity: { type: 'string' },
+          pickupCities: { type: 'array', items: { type: 'string' } },
+          departureAt: { type: 'string', format: 'date-time' },
+          departureWindowEnd: { type: 'string', format: 'date-time', nullable: true },
+          seatsAvailable: { type: 'integer' },
+          pricePerSeat: { type: 'integer' },
+          status: { type: 'string', enum: ['active', 'completed', 'cancelled'] },
+          liked: { type: 'boolean', description: 'Whether the requesting viewer liked this listing' },
+        },
+      },
       TripListItem: {
         type: 'object',
         properties: {
@@ -1085,7 +1122,7 @@ export const openapiDocument = {
         responses: {
           '200': {
             description: 'OK',
-            content: { 'application/json': { schema: cursorPaginated('TripListItem') } },
+            content: { 'application/json': { schema: cursorPaginated('TripCardItem') } },
           },
           ...errorResponses,
         },
