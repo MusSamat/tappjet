@@ -428,19 +428,10 @@ export function createTripsService(
     }
 
     const likedSet = await engagement.likedIds('trip', rows.map((r) => r.id), viewerId);
-    // Public counters in search too: phone-request counts, one groupBy per page.
-    const reveals = await prisma.contactReveal.groupBy({
-      by: ['contextId'],
-      where: { contextType: 'trip', contextId: { in: rows.map((r) => r.id) } },
-      _count: { _all: true },
-    });
-    const revealMap = new Map(reveals.map((c) => [c.contextId, c._count._all]));
-    const mapped = rows.map((r) =>
-      toListItem(r, {
-        liked: likedSet.has(r.id),
-        contacts: revealMap.get(r.id) ?? 0,
-      }),
-    );
+    // Search cards are info-lean — they don't show the phone-request counter, so
+    // skip the per-page contactReveal groupBy (a whole aggregation query saved
+    // on the hottest endpoint). The detail (getById) still computes real counts.
+    const mapped = rows.map((r) => toListItem(r, { liked: likedSet.has(r.id) }));
     const page = sliceAndNext(mapped, query.limit);
     if (!nearby) return page;
     return {

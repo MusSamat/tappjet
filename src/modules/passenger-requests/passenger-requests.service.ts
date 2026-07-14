@@ -230,22 +230,14 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     ]);
     const respByRequest = new Map(myResponses.map((r) => [r.requestId, { id: r.id, status: r.status }]));
     return {
-      data: await (async () => {
-        // Public counters in the browse feed too — one groupBy per page.
-        const reveals = await prisma.contactReveal.groupBy({
-          by: ['contextId'],
-          where: { contextType: 'passenger_request', contextId: { in: slice.map((r) => r.id) } },
-          _count: { _all: true },
-        });
-        const revealMap = new Map(reveals.map((c) => [c.contextId, c._count._all]));
-        return slice.map((r) =>
-          toDTO(r, {
-            liked: likedSet.has(r.id),
-            contacts: revealMap.get(r.id) ?? 0,
-            myResponse: respByRequest.get(r.id) ?? null,
-          }),
-        );
-      })(),
+      data: slice.map((r) =>
+        // Browse cards are info-lean — no phone-request counter — so skip the
+        // per-page contactReveal groupBy. The detail still computes real counts.
+        toDTO(r, {
+          liked: likedSet.has(r.id),
+          myResponse: respByRequest.get(r.id) ?? null,
+        }),
+      ),
       nextCursor: hasMore ? `${nearby ? 'nb_' : ''}${slice[slice.length - 1]!.id}` : null,
       ...(nearby ? { nearby: true } : {}),
     };
