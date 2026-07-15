@@ -247,10 +247,12 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
           ...(fromNames ? { originCity: { in: fromNames } } : {}),
           ...(toNames ? { destinationCity: { in: toNames } } : {}),
           // Single-day window (same semantics as the trips search «Сегодня» chip).
+          // Floor the window at "now" so «today» doesn't list already-departed
+          // requests — matching the calendar count (departure_date > NOW()).
           ...(input.date
             ? {
                 departureDate: {
-                  gte: new Date(input.date),
+                  gte: new Date(input.date) > now ? new Date(input.date) : now,
                   lt: new Date(new Date(input.date).getTime() + 24 * 60 * 60 * 1000),
                 },
               }

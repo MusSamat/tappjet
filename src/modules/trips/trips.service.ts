@@ -367,7 +367,10 @@ export function createTripsService(
     if (query.date) {
       const start = new Date(query.date);
       const end = new Date(start.getTime() + 24 * 60 * 60_000);
-      where.departureAt = { gte: start, lt: end };
+      // Never list already-departed trips: floor the window at "now" so the
+      // "today" list matches the calendar count (which is departure_at > NOW()).
+      const now = new Date();
+      where.departureAt = { gte: start > now ? start : now, lt: end };
     }
     if (query.min_price !== undefined) {
       where.pricePerSeat = { gte: query.min_price };
@@ -876,6 +879,7 @@ export function createTripsService(
              COUNT(*)::int AS n
       FROM trips
       WHERE status = 'active'
+        AND seats_available >= 1
         AND departure_at > NOW()
         AND origin_city = ${query.from_city}
         AND destination_city = ${query.to_city}
