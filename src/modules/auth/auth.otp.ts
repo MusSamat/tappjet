@@ -7,6 +7,7 @@ import { recordSent } from '@/lib/sms.js';
 // Telegram (Mini App requestContact / browser bot request_contact). Re-enable
 // the sendGatewayVerification call in sendOtp (and this import) when a token exists.
 // import { sendGatewayVerification } from '@/lib/telegramGateway.js';
+import { dexatelEnabled, dexatelSendVerification, dexatelCheckCode } from '@/lib/dexatel.js';
 import { logger } from '@/lib/logger.js';
 import { env } from '@/config/env.js';
 import type { Provider } from '@/lib/jwt.js';
@@ -27,8 +28,11 @@ export interface TelegramSender {
   api: { sendMessage(chatId: number, text: string): Promise<unknown> };
 }
 
-// Module-level so both createOtpMethods and handleTelegramLinkToken can use it.
-async function createOtpRecord(prisma: PrismaClient, phone: string): Promise<string> {
+// Persistent per-phone throttle: ≤1 code / OTP_MIN_GAP_SEC and ≤OTP_DAILY_CAP /
+// day. DB-backed so the cost cap survives restarts / multiple instances (the
+// route limiter is only an in-memory safety net). Every send path — local OR
+// Dexatel — MUST go through this before spending a paid message.
+async function assertOtpSendAllowed(prisma: PrismaClient, phone: string): Promise<void> {
   const lastOtp = await prisma.otpCode.findFirst({
     where: { phone },
     orderBy: { createdAt: 'desc' },
@@ -44,6 +48,11 @@ async function createOtpRecord(prisma: PrismaClient, phone: string): Promise<str
   if (dayCount >= OTP_DAILY_CAP) {
     throw Errors.rateLimited({ bucket: 'otp_send_day', limit: OTP_DAILY_CAP });
   }
+}
+
+// Module-level so both createOtpMethods and handleTelegramLinkToken can use it.
+async function createOtpRecord(prisma: PrismaClient, phone: string): Promise<string> {
+  await assertOtpSendAllowed(prisma, phone);
   const code = generateOtp();
   const codeHash = await password.hash(code);
   const expiresAt = new Date(Date.now() + OTP_TTL_SEC * 1000);
@@ -227,7 +236,7 @@ export async function registerFromTelegramContact(
   return userId ? 'ok' : 'blocked';
 }
 
-export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | null = null) {
+export function createOtpMethods(prisma: PrismaClient, _bot: TelegramSender | null = null) {
   async function sendOtp(phone: string): Promise<{ expiresInSec: number; debug_code?: string }> {
     const code = await createOtpRecord(prisma, phone);
     const text = `Tappjet: ${code} — код подтверждения. Срок действия: 10 минут.`;
@@ -250,25 +259,25 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     };
   }
 
+  // Send a login/reset OTP over Telegram. With Dexatel configured the code is
+  // delivered to the PHONE directly (no bot pre-link needed); otherwise we fall
+  // back to the local dev path that captures the code in the mock buffer.
   async function sendTelegramOtp(phone: string): Promise<{ expiresInSec: number }> {
-    const user = await prisma.user.findFirst({
-      where: { phone, deletedAt: null },
-      select: { telegramId: true },
-    });
-    if (!user) throw Errors.notFound('User');
-    if (!user.telegramId) {
-      throw Errors.conflict('Telegram not linked to this account', { reason: 'no_telegram_linked' });
+    if (dexatelEnabled()) {
+      // Enforce the per-phone cost cap BEFORE spending a paid Dexatel message.
+      await assertOtpSendAllowed(prisma, phone);
+      await dexatelSendVerification(phone, OTP_TTL_SEC);
+      // Marker row for throttle accounting — Dexatel owns the real code, so we
+      // store no hash; consumeOtp() checks Dexatel, never this row.
+      await prisma.otpCode.create({
+        data: { phone, codeHash: 'dexatel', expiresAt: new Date(Date.now() + OTP_TTL_SEC * 1000) },
+      });
+      return { expiresInSec: OTP_TTL_SEC };
     }
-    if (!bot) throw Errors.serviceUnavailable('Telegram bot not configured');
-
     const code = await createOtpRecord(prisma, phone);
     const text = `Tappjet: ${code} — код подтверждения. Срок действия: 10 минут.`;
-    try {
-      await bot.api.sendMessage(Number(user.telegramId), text);
-    } catch (err) {
-      logger.error({ err, phone }, 'Telegram OTP send failed');
-      throw Errors.serviceUnavailable('Telegram message delivery failed');
-    }
+    recordSent(phone, text);
+    logger.info({ phone }, '[MOCK OTP] code captured locally (no DEXATEL_API_KEY)');
     return { expiresInSec: OTP_TTL_SEC };
   }
 
@@ -391,20 +400,18 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     return prisma.$transaction(async (tx) => bindPhoneInTx(tx, userId, phone, new Date()));
   }
 
-  async function verifyOtp(
-    phone: string,
-    code: string,
-    provisionalUserId: string | null,
-    provider: Provider,
-    deviceInfo?: string,
-  ): Promise<AuthResult> {
+  // Validate + consume an OTP for `phone`. With Dexatel the check is delegated to
+  // the provider (it owns generation, expiry, single-use). Without a key we fall
+  // back to the local bcrypt otpCode table (dev/tests). Throws on any mismatch.
+  async function consumeOtp(phone: string, code: string): Promise<void> {
+    if (dexatelEnabled()) {
+      const ok = await dexatelCheckCode(phone, code);
+      if (!ok) throw Errors.otpWrong();
+      return;
+    }
     const now = new Date();
-    const recent = await prisma.otpCode.findFirst({
-      where: { phone },
-      orderBy: { createdAt: 'desc' },
-    });
+    const recent = await prisma.otpCode.findFirst({ where: { phone }, orderBy: { createdAt: 'desc' } });
     if (!recent) throw Errors.otpWrong();
-
     if (
       recent.attempts >= OTP_MAX_ATTEMPTS &&
       now.getTime() - recent.createdAt.getTime() < OTP_BRUTEFORCE_BLOCK_MIN * 60_000
@@ -413,20 +420,80 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     }
     if (recent.usedAt) throw Errors.otpWrong();
     if (recent.expiresAt.getTime() <= now.getTime()) throw Errors.otpExpired();
-
     const match = await password.verify(code, recent.codeHash);
     if (!match) {
-      await prisma.otpCode.update({
-        where: { id: recent.id },
-        data: { attempts: { increment: 1 } },
-      });
+      await prisma.otpCode.update({ where: { id: recent.id }, data: { attempts: { increment: 1 } } });
       throw Errors.otpWrong();
     }
+    await prisma.otpCode.update({ where: { id: recent.id }, data: { usedAt: now, attempts: { increment: 1 } } });
+  }
 
-    await prisma.otpCode.update({
-      where: { id: recent.id },
-      data: { usedAt: now, attempts: { increment: 1 } },
+  // Classical registration: verify the OTP, then create (or complete) the account
+  // with name/surname/password and issue a full session. Rejects if the phone is
+  // already registered with a password.
+  async function registerWithPhone(
+    phone: string,
+    code: string,
+    name: string,
+    surname: string,
+    plainPassword: string,
+    deviceInfo?: string,
+  ): Promise<AuthResult> {
+    await consumeOtp(phone, code);
+    const now = new Date();
+    const passwordHash = await password.hash(plainPassword);
+
+    const user = await prisma.$transaction(async (tx) => {
+      const existing = await tx.user.findFirst({ where: { phone, deletedAt: null } });
+      if (existing?.passwordHash) {
+        throw Errors.conflict('Phone already registered', { reason: 'already_registered' });
+      }
+      const u = existing
+        ? await tx.user.update({
+            where: { id: existing.id },
+            data: {
+              name,
+              surname,
+              passwordHash,
+              phoneVerifiedAt: existing.phoneVerifiedAt ?? now,
+              termsAcceptedAt: existing.termsAcceptedAt ?? now,
+              lastPasswordChangedAt: now,
+            },
+          })
+        : await tx.user.create({
+            data: {
+              phone,
+              name,
+              surname,
+              passwordHash,
+              language: 'ru',
+              roles: ['passenger'],
+              phoneVerifiedAt: now,
+              termsAcceptedAt: now,
+              lastPasswordChangedAt: now,
+            },
+          });
+      await tx.authProvider.upsert({
+        where: { provider_providerUserId: { provider: 'phone', providerUserId: phone } },
+        update: {},
+        create: { userId: u.id, provider: 'phone', providerUserId: phone },
+      });
+      return u;
     });
+
+    if (user.isBlocked) throw Errors.forbidden({ reason: 'blocked' });
+    return issueFullAuthForUser(prisma, user.id, 'phone', deviceInfo);
+  }
+
+  async function verifyOtp(
+    phone: string,
+    code: string,
+    provisionalUserId: string | null,
+    provider: Provider,
+    deviceInfo?: string,
+  ): Promise<AuthResult> {
+    const now = new Date();
+    await consumeOtp(phone, code);
 
     const user = await prisma.$transaction(async (tx) => {
       if (provisionalUserId) {
@@ -531,5 +598,5 @@ export function createOtpMethods(prisma: PrismaClient, bot: TelegramSender | nul
     return issueFullAuthForUser(prisma, record.userId, 'telegram', deviceInfo);
   }
 
-  return { sendOtp, sendTelegramOtp, sendPhoneAddOtp, bindVerifiedPhone, initTelegramLink, getTelegramLinkStatus, verifyOtp, initBotLogin, getBotLoginStatus, claimBotLogin };
+  return { sendOtp, sendTelegramOtp, sendPhoneAddOtp, bindVerifiedPhone, initTelegramLink, getTelegramLinkStatus, verifyOtp, registerWithPhone, initBotLogin, getBotLoginStatus, claimBotLogin };
 }

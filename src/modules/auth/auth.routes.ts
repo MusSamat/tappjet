@@ -13,6 +13,7 @@ import {
   LogoutBody,
   PhoneLoginBody,
   RefreshBody,
+  RegisterBody,
   SendOtpBody,
   TelegramLoginBody,
   VerifyOtpBody,
@@ -95,6 +96,31 @@ export function createAuthRouter(
         req.header('user-agent')?.slice(0, 300),
       );
       res.status(200).json(result);
+    }),
+  );
+
+  // ─── Classical registration (phone + Telegram OTP + profile + password) ──
+  router.post(
+    '/register',
+    telegramAuthLimit,
+    validate({ body: RegisterBody }),
+    asyncHandler(async (req, res) => {
+      const { phone, code, name, surname, password } = req.body as {
+        phone: string;
+        code: string;
+        name: string;
+        surname: string;
+        password: string;
+      };
+      const result = await service.registerWithPhone(
+        phone,
+        code,
+        name,
+        surname,
+        password,
+        req.header('user-agent')?.slice(0, 300),
+      );
+      res.status(201).json(result);
     }),
   );
 

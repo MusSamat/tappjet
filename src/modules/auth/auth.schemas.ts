@@ -28,6 +28,18 @@ export const SendOtpBody = z.object({
   phone: KgPhoneSchema,
 });
 
+// Classical registration: phone + Telegram OTP + profile + password, all in one
+// step. The OTP is validated here (not via /phone/verify) so no account is
+// silently created before the user commits name/surname/password.
+export const RegisterBody = z.object({
+  phone: KgPhoneSchema,
+  code: z.string().regex(/^\d{6}$/, 'code must be 6 digits'),
+  name: z.string().trim().min(1).max(100),
+  surname: z.string().trim().min(1).max(100),
+  password: z.string().min(8).max(200).regex(/\d/, 'password must contain a digit'),
+  channel: z.enum(['mobile', 'web']).default('mobile'),
+});
+
 export const PhoneFromTelegramBody = z.object({
   // Signed URLSearchParams payload from WebApp.requestContact()
   response: z.string().min(20).max(4096),
@@ -116,6 +128,7 @@ export type GoogleLoginInput = z.infer<typeof GoogleLoginBody>;
 export type AppleLoginInput = z.infer<typeof AppleLoginBody>;
 export type PhoneLoginInput = z.infer<typeof PhoneLoginBody>;
 export type SendOtpInput = z.infer<typeof SendOtpBody>;
+export type RegisterInput = z.infer<typeof RegisterBody>;
 export type VerifyOtpInput = z.infer<typeof VerifyOtpBody>;
 export type RefreshInput = z.infer<typeof RefreshBody>;
 export type LogoutInput = z.infer<typeof LogoutBody>;

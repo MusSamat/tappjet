@@ -5,6 +5,7 @@ import type { Express } from 'express';
 import { testPrisma } from '../../../tests/setup.js';
 import { createApp } from '@/server.js';
 import { NoopNotifier } from '@/lib/notifier.js';
+import { getSentMessages, clearSentMessages } from '@/lib/sms.js';
 
 // ─── Mock Telegram bot ──────────────────────────────────────────────────────
 
@@ -23,13 +24,6 @@ function clearTgMessages() {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-async function seedOtp(phone: string, code: string): Promise<void> {
-  const codeHash = await bcrypt.hash(code, 4);
-  await testPrisma.otpCode.create({
-    data: { phone, codeHash, expiresAt: new Date(Date.now() + 10 * 60_000) },
-  });
-}
 
 async function seedUser(opts: {
   phone: string;
@@ -58,9 +52,16 @@ let appNoBot: Express;
 
 beforeEach(() => {
   clearTgMessages();
+  clearSentMessages();
   appWithBot = createApp(testPrisma, new NoopNotifier(), mockBot);
   appNoBot = createApp(testPrisma, new NoopNotifier());
 });
+
+// Read the OTP code the local dev-fallback captured in the mock buffer.
+function capturedCode(phone: string): string {
+  const msg = [...getSentMessages()].reverse().find((m) => m.phone === phone);
+  return msg!.text.match(/\d{6}/)![0]!;
+}
 
 // ─── POST /v1/auth/check-phone ────────────────────────────────────────────────
 
@@ -131,7 +132,7 @@ describe('POST /v1/auth/check-phone', () => {
 // ─── POST /v1/auth/telegram/otp/send ─────────────────────────────────────────
 
 describe('POST /v1/auth/telegram/otp/send', () => {
-  it('sends OTP via bot, creates OtpCode row, returns expiresInSec=600', async () => {
+  it('sends OTP (Dexatel/local), creates OtpCode row, returns expiresInSec=600', async () => {
     await seedUser({ phone: '+996700001001', telegramId: 11223344n });
 
     const res = await request(appWithBot)
@@ -145,40 +146,29 @@ describe('POST /v1/auth/telegram/otp/send', () => {
     expect(otps).toHaveLength(1);
     expect(otps[0]!.attempts).toBe(0);
 
-    expect(sentTgMessages).toHaveLength(1);
-    expect(sentTgMessages[0]!.chatId).toBe(11223344);
-    expect(sentTgMessages[0]!.text).toMatch(/Tappjet:/);
+    // Dexatel-era: code goes to the phone, not a bot chat. Locally it lands in
+    // the mock buffer.
+    expect(capturedCode('+996700001001')).toMatch(/^\d{6}$/);
   });
 
-  it('returns 404 when phone is not registered', async () => {
+  it('sends OTP for an UNREGISTERED phone (classical registration)', async () => {
     const res = await request(appWithBot)
       .post('/v1/auth/telegram/otp/send')
       .send({ phone: '+996700099099' });
 
-    expect(res.status).toBe(404);
-    expect(sentTgMessages).toHaveLength(0);
+    expect(res.status).toBe(200);
+    expect(res.body.expiresInSec).toBe(600);
+    expect(capturedCode('+996700099099')).toMatch(/^\d{6}$/);
   });
 
-  it('returns 409 CONFLICT with reason=no_telegram_linked when user has no telegramId', async () => {
-    await seedUser({ phone: '+996700002001' });
-
-    const res = await request(appWithBot)
-      .post('/v1/auth/telegram/otp/send')
-      .send({ phone: '+996700002001' });
-
-    expect(res.status).toBe(409);
-    expect(res.body.error.details.reason).toBe('no_telegram_linked');
-    expect(sentTgMessages).toHaveLength(0);
-  });
-
-  it('returns 503 SERVICE_UNAVAILABLE when bot is not configured', async () => {
-    await seedUser({ phone: '+996700003001', telegramId: 77665544n });
+  it('sends OTP even when no bot is configured (delivery is Dexatel-side)', async () => {
+    await seedUser({ phone: '+996700003001' });
 
     const res = await request(appNoBot)
       .post('/v1/auth/telegram/otp/send')
       .send({ phone: '+996700003001' });
 
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(200);
   });
 
   it('enforces 1-minute gap (rate limit)', async () => {
@@ -193,7 +183,6 @@ describe('POST /v1/auth/telegram/otp/send', () => {
       .send({ phone: '+996700004001' });
 
     expect(second.status).toBe(429);
-    expect(sentTgMessages).toHaveLength(1);
   });
 
   it('blocks after 5 sends in 24 hours (daily cap)', async () => {
@@ -232,7 +221,7 @@ describe('POST /v1/auth/telegram/otp/send', () => {
     await seedUser({ phone, telegramId: 10203040n });
     await request(appWithBot).post('/v1/auth/telegram/otp/send').send({ phone });
 
-    const code = sentTgMessages[0]!.text.match(/\d{6}/)![0]!;
+    const code = capturedCode(phone);
 
     const verify = await request(appWithBot)
       .post('/v1/auth/phone/verify')

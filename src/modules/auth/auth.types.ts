@@ -74,6 +74,14 @@ export interface AuthService {
     provider: Provider,
     deviceInfo?: string,
   ): Promise<AuthResult>;
+  registerWithPhone(
+    phone: string,
+    code: string,
+    name: string,
+    surname: string,
+    plainPassword: string,
+    deviceInfo?: string,
+  ): Promise<AuthResult>;
   refresh(token: string, deviceInfo: string | undefined, ip: string | null): Promise<TokenPair>;
   logout(token: string): Promise<void>;
   logoutAll(userId: string): Promise<void>;

@@ -42,6 +42,11 @@ const EnvSchema = z.object({
   // captured/logged locally instead of sent (see lib/telegramGateway.ts).
   TELEGRAM_GATEWAY_TOKEN: z.string().default(''),
 
+  // Dexatel — delivers OTP codes over the Telegram channel (omnichannel).
+  // Empty during testing: codes are captured/logged locally (see lib/dexatel.ts).
+  DEXATEL_API_KEY: z.string().default(''),
+  DEXATEL_SENDER: z.string().default('Tappjet'),
+
   // OAuth — audience / client IDs to match in verified JWTs. Comma-separated
   // so the Flutter app and the Web client can use different client ids.
   GOOGLE_CLIENT_IDS: z.string().default('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'),

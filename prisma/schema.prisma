@@ -25,6 +25,7 @@ model User {
   phone            String    @unique @db.VarChar(20)
   phoneVerifiedAt  DateTime? @map("phone_verified_at") @db.Timestamptz(6)
   name             String    @db.VarChar(100)
+  surname          String?   @db.VarChar(100)
   avatarUrl        String?   @map("avatar_url") @db.VarChar(500)
   bio              String?   @db.VarChar(300)
   roles            String[]  @default(["passenger"])
