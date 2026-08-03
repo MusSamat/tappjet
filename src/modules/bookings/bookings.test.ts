@@ -443,3 +443,49 @@ describe('requirePhone gate (provisional Telegram accounts)', () => {
     expect(res.body.error.details.reason).toBe('phone_required');
   });
 });
+
+describe('POST /v1/bookings — Idempotency-Key (replay, not 409)', () => {
+  it('replays the same key as 200 with the original booking — no duplicate row', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: 'IDK1' });
+    const trip = await createActiveTrip({ driverId: d.id, seatsTotal: 3, seatsAvailable: 3 });
+    const p = await createUser(testPrisma);
+
+    const first = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p.accessToken}`)
+      .set('Idempotency-Key', 'idem-key-abc')
+      .send({ tripId: trip.id, seatsCount: 1 });
+    expect(first.status).toBe(201);
+
+    const replay = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p.accessToken}`)
+      .set('Idempotency-Key', 'idem-key-abc')
+      .send({ tripId: trip.id, seatsCount: 1 });
+    expect(replay.status).toBe(200); // replay, not 409
+    expect(replay.body.id).toBe(first.body.id); // same booking
+
+    expect(await testPrisma.booking.count({ where: { tripId: trip.id } })).toBe(1);
+  });
+
+  it('rejects the same key from a different user (409 idempotency_key_mismatch)', async () => {
+    const d = await createVerifiedDriver(testPrisma, { plate: 'IDK2' });
+    const trip = await createActiveTrip({ driverId: d.id, seatsTotal: 3, seatsAvailable: 3 });
+    const p1 = await createUser(testPrisma);
+    const p2 = await createUser(testPrisma);
+
+    await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p1.accessToken}`)
+      .set('Idempotency-Key', 'shared-key')
+      .send({ tripId: trip.id, seatsCount: 1 });
+
+    const other = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${p2.accessToken}`)
+      .set('Idempotency-Key', 'shared-key')
+      .send({ tripId: trip.id, seatsCount: 1 });
+    expect(other.status).toBe(409);
+    expect(other.body.error.details.reason).toBe('idempotency_key_mismatch');
+  });
+});

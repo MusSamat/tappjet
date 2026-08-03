@@ -50,17 +50,20 @@ function idempotencyKey(): string {
 }
 
 describe('POST /v1/trips', () => {
-  it('requires driver role (passenger forbidden)', async () => {
+  // Phase 1: publishing is gated by a garage car (cars table), not the driver
+  // role or profile verification. A user with no car cannot publish → 409 no_car.
+  it('rejects publishing without a garage car (409 no_car)', async () => {
     const u = await createUser(testPrisma);
     const res = await request(app)
       .post('/v1/trips')
       .set('Authorization', `Bearer ${u.accessToken}`)
       .set('Idempotency-Key', idempotencyKey())
       .send(tripPayload());
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(409);
+    expect(res.body.error.details.reason).toBe('no_car');
   });
 
-  it('requires verified driver profile', async () => {
+  it('publishes with a garage car even if driver-profile verification is pending (Phase 1: car-gated)', async () => {
     const d = await createVerifiedDriver(testPrisma, { plate: 'A1' });
     await testPrisma.driverProfile.update({
       where: { userId: d.id },
@@ -71,8 +74,7 @@ describe('POST /v1/trips', () => {
       .set('Authorization', `Bearer ${d.accessToken}`)
       .set('Idempotency-Key', idempotencyKey())
       .send(tripPayload());
-    expect(res.status).toBe(403);
-    expect(res.body.error.details.reason).toBe('driver_not_verified');
+    expect(res.status).toBe(201);
   });
 
   it('creates an active trip with computed duration', async () => {
@@ -488,8 +490,10 @@ describe('Trip pickup/dropoff cities (посадка/высадка по пут�
     const res = await request(app)
       .get('/v1/trips?from_city=Бишкек&to_city=Ош')
       .set('Authorization', `Bearer ${caller.accessToken}`);
+    // The lean search DTO drops dropoffCities (full arrays live on the detail
+    // DTO); assert the match landed on the Batken trip via its Ош dropoff.
     expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].dropoffCities).toEqual(['Ош']);
+    expect(res.body.data[0].destinationCity).toBe('Баткен');
   });
 
   it('does NOT match a dropoff city used as the search origin (mirror)', async () => {

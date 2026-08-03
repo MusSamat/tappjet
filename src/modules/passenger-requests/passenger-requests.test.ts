@@ -152,7 +152,8 @@ describe('GET /v1/passenger-requests', () => {
   it('filters by minimum seats', async () => {
     const p = await createUser(testPrisma);
     await createRequest(p, { seatsNeeded: 1 });
-    await createRequest(p, { seatsNeeded: 3 });
+    // One open request per route/day is enforced — put the 2nd on another day.
+    await createRequest(p, { seatsNeeded: 3, departureDate: dayAfter() });
 
     const res = await request(app).get('/v1/passenger-requests?seats=2');
     expect(res.status).toBe(200);
@@ -174,9 +175,11 @@ describe('GET /v1/passenger-requests', () => {
   });
 
   it('paginates with cursor', async () => {
-    const p = await createUser(testPrisma);
+    // One open request per passenger per route/day — use distinct passengers so
+    // all three coexist on the same route.
     for (let i = 0; i < 3; i++) {
-      await createRequest(p, { departureDate: new Date(Date.now() + (26 + i) * 60 * 60_000).toISOString() });
+      const pi = await createUser(testPrisma);
+      await createRequest(pi, { departureDate: new Date(Date.now() + (26 + i) * 60 * 60_000).toISOString() });
     }
 
     const first = await request(app).get('/v1/passenger-requests?limit=2');

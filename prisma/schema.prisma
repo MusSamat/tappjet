@@ -175,6 +175,7 @@ model Booking {
   cancelReasons    String[]  @map("cancel_reasons") @default([])
   expiresAt   DateTime? @map("expires_at") @db.Timestamptz(6)
   viewedAt    DateTime? @map("viewed_at") @db.Timestamptz(6)
+  idempotencyKey String? @unique @map("idempotency_key") @db.VarChar(100)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 

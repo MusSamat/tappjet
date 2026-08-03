@@ -61,7 +61,7 @@ export interface BookingsService {
     passengerId: string,
     body: BookingCreateInput,
     idempotencyKey?: string,
-  ): Promise<BookingDTO>;
+  ): Promise<{ booking: BookingDTO; reused: boolean }>;
   accept(bookingId: string, driverUserId: string): Promise<BookingDTO>;
   reject(bookingId: string, driverUserId: string, reason?: string): Promise<BookingDTO>;
   cancel(bookingId: string, userId: string, input: BookingCancelInput): Promise<BookingDTO>;
@@ -87,8 +87,22 @@ export function createBookingsService(prisma: PrismaClient, notifier: Notifier):
   async function create(
     passengerId: string,
     body: BookingCreateInput,
-    _idempotencyKey?: string,
-  ): Promise<BookingDTO> {
+    idempotencyKey?: string,
+  ): Promise<{ booking: BookingDTO; reused: boolean }> {
+    // Idempotency-Key replay: a retried request (e.g. the 201 was lost on the
+    // wire) returns the ORIGINAL booking instead of a 409 — same contract as
+    // POST /trips (TZ §19.1).
+    if (idempotencyKey) {
+      const prior = await prisma.booking.findUnique({ where: { idempotencyKey } });
+      if (prior) {
+        if (prior.passengerId !== passengerId) {
+          throw Errors.conflict('Idempotency-Key belongs to another user', {
+            reason: 'idempotency_key_mismatch',
+          });
+        }
+        return { booking: await loadDTO(prisma, prior.id), reused: true };
+      }
+    }
     const now = new Date();
     const expiresAt = new Date(now.getTime() + BOOKING_PENDING_TTL_MIN * 60_000);
 
@@ -173,6 +187,7 @@ export function createBookingsService(prisma: PrismaClient, notifier: Notifier):
             comment: body.comment ?? null,
             status: 'pending',
             expiresAt,
+            idempotencyKey: idempotencyKey ?? null,
           },
         });
       } catch (err) {
@@ -189,15 +204,20 @@ export function createBookingsService(prisma: PrismaClient, notifier: Notifier):
 
     const full = await loadDTO(prisma, created.id);
 
-    // Notify driver (outside the transaction — side-effects shouldn't block DB commit).
-    await notifier.bookingNewRequest(full.trip.driverId, {
-      booking: full,
-      trip: full.trip,
-      passengerName: full.passenger.name,
-      passengerRating: full.passenger.rating,
-    });
+    // Notify driver — best-effort, outside the transaction. A push/notification
+    // failure must NOT fail the booking (it's already committed) — fault isolation.
+    try {
+      await notifier.bookingNewRequest(full.trip.driverId, {
+        booking: full,
+        trip: full.trip,
+        passengerName: full.passenger.name,
+        passengerRating: full.passenger.rating,
+      });
+    } catch (err) {
+      logger.error({ err, bookingId: full.id }, 'bookingNewRequest notify failed (booking kept)');
+    }
 
-    return full;
+    return { booking: full, reused: false };
   }
 
   // ─── Accept ─────────────────────────────────────────────────────────

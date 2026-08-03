@@ -222,3 +222,47 @@ describe('GET /v1/drivers/me/stats', () => {
     expect(res.body.cancellations30d).toBe(1);
   });
 });
+
+describe('POST /v1/drivers/verification — image type validation (§9.1/§9.3)', () => {
+  // Only image/jpeg and image/png are accepted; MIME + magic bytes are both
+  // checked (a client can lie about Content-Type).
+  const validPhotos = (req: request.Test) =>
+    req
+      .field('carMake', 'Toyota')
+      .field('carModel', 'Camry')
+      .field('carYear', '2015')
+      .field('carColor', 'Белый')
+      .field('carPlate', '01KG777ZZZ')
+      .field('seatsCount', '4')
+      .attach('license_back', jpegBuffer(), { filename: 'lb.jpg', contentType: 'image/jpeg' })
+      .attach('car_passport', jpegBuffer(), { filename: 'p.jpg', contentType: 'image/jpeg' })
+      .attach('car_passport_back', jpegBuffer(), { filename: 'pb.jpg', contentType: 'image/jpeg' })
+      .attach('car_photo', jpegBuffer(), { filename: 'c.jpg', contentType: 'image/jpeg' })
+      .attach('selfie', jpegBuffer(), { filename: 's.jpg', contentType: 'image/jpeg' });
+
+  it('rejects an unsupported content-type (application/pdf → 400 unsupported_mime)', async () => {
+    const u = await createUser(testPrisma);
+    const res = await validPhotos(
+      request(app).post('/v1/drivers/verification').set('Authorization', `Bearer ${u.accessToken}`),
+    ).attach('license', Buffer.from('%PDF-1.4 not an image'), { filename: 'l.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.details.reason).toBe('unsupported_mime');
+    expect(await testPrisma.driverProfile.findUnique({ where: { userId: u.id } })).toBeNull();
+  });
+
+  it('rejects a file that lies about being a JPEG (magic-byte check)', async () => {
+    const u = await createUser(testPrisma);
+    const res = await validPhotos(
+      request(app).post('/v1/drivers/verification').set('Authorization', `Bearer ${u.accessToken}`),
+    ).attach('license', Buffer.from('this is plain text pretending to be a jpeg'), {
+      filename: 'l.jpg',
+      contentType: 'image/jpeg',
+    });
+
+    expect(res.status).toBe(400);
+    // Passes the MIME filter but fails on the bytes — either check is a valid reject.
+    expect(['bad_magic_bytes', 'unreadable_image_dimensions']).toContain(res.body.error.details.reason);
+    expect(await testPrisma.driverProfile.findUnique({ where: { userId: u.id } })).toBeNull();
+  });
+});

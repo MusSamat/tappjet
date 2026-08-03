@@ -27,12 +27,13 @@ export function createBookingsRouter(prisma: PrismaClient, notifier: Notifier): 
     validate({ body: BookingCreateBody }),
     asyncHandler(async (req, res) => {
       const idempotencyKey = req.header('idempotency-key') ?? undefined;
-      const booking = await service.create(
+      const { booking, reused } = await service.create(
         req.user!.id,
         req.body as Parameters<typeof service.create>[1],
         idempotencyKey,
       );
-      res.status(201).json(booking);
+      // Replay of a prior key → 200 with the original booking; fresh → 201.
+      res.status(reused ? 200 : 201).json(booking);
     }),
   );
 

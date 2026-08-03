@@ -17,13 +17,14 @@ import { createInProcessNotifier } from '@/lib/notifier.js';
 let server: http.Server;
 let io: IoServer;
 let port: number;
+let app: ReturnType<typeof createApp>;
 
 beforeAll(async () => {
   server = http.createServer();
   io = createIoServer(server);
   const notifier = createInProcessNotifier(testPrisma, io);
   attachChatNamespace(io, testPrisma, notifier);
-  const app = createApp(testPrisma, notifier);
+  app = createApp(testPrisma, notifier);
   server.on('request', app);
   await new Promise<void>((resolve) => server.listen(0, resolve));
   port = (server.address() as AddressInfo).port;
@@ -177,5 +178,78 @@ describe('chat namespace', () => {
     const err = await waitForEvent<{ code: string }>(s, 'chat:error');
     expect(err.code).toBe('FORBIDDEN');
     s.close();
+  });
+});
+
+describe('WS real-time notifications (#11)', () => {
+  it('delivers booking:new_request to the driver in real time when a passenger books', async () => {
+    const driver = await createVerifiedDriver(testPrisma, { plate: `WSN${Math.floor(Math.random() * 1e5)}` });
+    const trip = await testPrisma.trip.create({
+      data: {
+        driverId: driver.id,
+        originCity: 'Бишкек',
+        destinationCity: 'Ош',
+        originAddress: 'x',
+        departureAt: new Date(Date.now() + 4 * 60 * 60_000),
+        estimatedDurationMin: 600,
+        seatsTotal: 3,
+        seatsAvailable: 3,
+        pricePerSeat: 900,
+        status: 'active',
+      },
+    });
+    const passenger = await createUser(testPrisma);
+
+    const ds = connectSocket(driver.accessToken);
+    await waitForEvent(ds, 'connect');
+
+    // Arm the listener BEFORE booking, then book over HTTP → the driver's socket
+    // must receive the push within the timeout (real-time, not polling).
+    const pushed = waitForEvent<{ booking: { id: string } }>(ds, 'booking:new_request', 2000);
+    const res = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${passenger.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
+    expect(res.status).toBe(201);
+
+    const evt = await pushed;
+    expect(evt.booking.id).toBe(res.body.id);
+    ds.close();
+  });
+
+  it('delivers booking:accepted to the passenger in real time when the driver accepts', async () => {
+    const driver = await createVerifiedDriver(testPrisma, { plate: `WSA${Math.floor(Math.random() * 1e5)}` });
+    const trip = await testPrisma.trip.create({
+      data: {
+        driverId: driver.id,
+        originCity: 'Бишкек',
+        destinationCity: 'Ош',
+        originAddress: 'x',
+        departureAt: new Date(Date.now() + 4 * 60 * 60_000),
+        estimatedDurationMin: 600,
+        seatsTotal: 3,
+        seatsAvailable: 3,
+        pricePerSeat: 900,
+        status: 'active',
+      },
+    });
+    const passenger = await createUser(testPrisma);
+    const booking = await request(app)
+      .post('/v1/bookings')
+      .set('Authorization', `Bearer ${passenger.accessToken}`)
+      .send({ tripId: trip.id, seatsCount: 1 });
+
+    const ps = connectSocket(passenger.accessToken);
+    await waitForEvent(ps, 'connect');
+
+    const pushed = waitForEvent<{ booking: { id: string } }>(ps, 'booking:accepted', 2000);
+    await request(app)
+      .patch(`/v1/bookings/${booking.body.id}/accept`)
+      .set('Authorization', `Bearer ${driver.accessToken}`)
+      .expect(200);
+
+    const evt = await pushed;
+    expect(evt.booking.id).toBe(booking.body.id);
+    ps.close();
   });
 });

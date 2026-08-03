@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { logger } from '@/lib/logger.js';
+import { Errors } from '@/lib/errors.js';
 
 /**
  * Shared engagement (views + likes) for trips and passenger requests.
@@ -77,11 +78,22 @@ export function createEngagementService(prisma: PrismaClient) {
   }
 
   /** Toggle a like on. Returns true if newly liked, false if it already existed. */
+  // Owners can't like/unlike their own listing — a self-like would just game
+  // the (public) counters. Throws 400 own_listing.
+  async function assertNotOwner(target: ListingTarget, id: string, userId: string): Promise<void> {
+    const owner =
+      target === 'trip'
+        ? (await prisma.trip.findUnique({ where: { id }, select: { driverId: true } }))?.driverId
+        : (await prisma.passengerRequest.findUnique({ where: { id }, select: { passengerId: true } }))?.passengerId;
+    if (owner === userId) throw Errors.validation({ reason: 'own_listing' });
+  }
+
   async function like(
     target: ListingTarget,
     id: string,
     userId: string,
   ): Promise<boolean> {
+    await assertNotOwner(target, id, userId);
     try {
       await prisma.$transaction(async (tx) => {
         await tx.listingLike.create({
@@ -108,6 +120,7 @@ export function createEngagementService(prisma: PrismaClient) {
     id: string,
     userId: string,
   ): Promise<boolean> {
+    await assertNotOwner(target, id, userId);
     return prisma.$transaction(async (tx) => {
       const del = await tx.listingLike.deleteMany({
         where: { targetType: target, targetId: id, userId },
