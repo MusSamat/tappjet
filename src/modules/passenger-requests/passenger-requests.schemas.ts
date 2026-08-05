@@ -18,6 +18,18 @@ export const CreatePassengerRequestBody = z
 
 export type CreatePassengerRequestInput = z.infer<typeof CreatePassengerRequestBody>;
 
+// Owner edit of an open request (no price — a request has none; drivers offer it).
+export const UpdatePassengerRequestBody = z
+  .object({
+    seatsNeeded: z.coerce.number().int().min(1).max(8).optional(),
+    departureDate: z.string().datetime({ offset: true }).optional(),
+    flexible: z.boolean().optional(),
+    comment: z.string().trim().max(500).nullable().optional(),
+  })
+  .strict();
+
+export type UpdatePassengerRequestInput = z.infer<typeof UpdatePassengerRequestBody>;
+
 export const ListRequestsQuery = z.object({
   from_city: CityName.optional(),
   to_city: CityName.optional(),

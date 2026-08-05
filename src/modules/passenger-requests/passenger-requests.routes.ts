@@ -11,6 +11,7 @@ import {
   RequestIdParam,
   RespondBody,
   ResponseIdParam,
+  UpdatePassengerRequestBody,
 } from './passenger-requests.schemas.js';
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
@@ -130,6 +131,22 @@ export function createPassengerRequestsRouter(prisma: PrismaClient, notifier: No
         req.body as Parameters<typeof service.create>[1],
       );
       res.status(201).json(result);
+    }),
+  );
+
+  // PATCH /passenger-requests/:id — edit own open request (seats/date/comment)
+  router.patch(
+    '/:id',
+    requireAuth,
+    requirePhone,
+    validate({ params: RequestIdParam, body: UpdatePassengerRequestBody }),
+    asyncHandler(async (req, res) => {
+      const updated = await service.update(
+        req.params.id!,
+        req.user!.id,
+        req.body as Parameters<typeof service.update>[2],
+      );
+      res.json(updated);
     }),
   );
 

@@ -6,7 +6,7 @@ import { districtCityNames } from '@/lib/cityArea.js';
 import { redactContactInfo } from '@/lib/contentFilter.js';
 import { bishkekDayRange } from '@/lib/dates.js';
 import type { Notifier } from '@/lib/notifier.js';
-import type { CreatePassengerRequestInput, ListRequestsInput, RespondInput } from './passenger-requests.schemas.js';
+import type { CreatePassengerRequestInput, ListRequestsInput, RespondInput, UpdatePassengerRequestInput } from './passenger-requests.schemas.js';
 
 export interface PassengerRequestDTO {
   id: string;
@@ -344,6 +344,38 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     });
   }
 
+  async function update(
+    id: string,
+    passengerId: string,
+    input: UpdatePassengerRequestInput,
+  ): Promise<PassengerRequestDTO> {
+    const req = await prisma.passengerRequest.findUnique({ where: { id } });
+    if (!req) throw Errors.notFound('PassengerRequest');
+    if (req.passengerId !== passengerId) throw Errors.forbidden();
+    if (req.status !== 'open') throw Errors.conflict('Request is not open');
+
+    if (input.departureDate !== undefined) {
+      const departure = new Date(input.departureDate);
+      const now = new Date();
+      if (departure <= now) throw Errors.validation({ departureDate: 'must be in the future' });
+      const maxAhead = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000); // 60 days
+      if (departure > maxAhead) throw Errors.validation({ departureDate: 'too far ahead (max 60 days)' });
+    }
+
+    await prisma.passengerRequest.update({
+      where: { id },
+      data: {
+        ...(input.seatsNeeded !== undefined ? { seatsNeeded: input.seatsNeeded } : {}),
+        ...(input.departureDate !== undefined ? { departureDate: new Date(input.departureDate) } : {}),
+        ...(input.flexible !== undefined ? { flexible: input.flexible } : {}),
+        ...(input.comment !== undefined
+          ? { comment: input.comment === null ? null : redactContactInfo(input.comment).clean }
+          : {}),
+      },
+    });
+    return getById(id, passengerId);
+  }
+
   async function getById(id: string, viewerId: string | null = null): Promise<PassengerRequestDTO> {
     const row = await prisma.passengerRequest.findUnique({
       where: { id },
@@ -402,7 +434,7 @@ export function createPassengerRequestsService(prisma: PrismaClient) {
     return { data: rows.map((r) => ({ date: r.day, count: r.n })) };
   }
 
-  return { create, list, listMy, cancel, getById, like, unlike, recordView, calendar };
+  return { create, list, listMy, cancel, update, getById, like, unlike, recordView, calendar };
 }
 
 // ─── Response DTO ─────────────────────────────────────────────────────
