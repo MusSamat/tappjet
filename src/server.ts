@@ -16,6 +16,7 @@ import { createUsersRouter } from '@/modules/users/users.routes.js';
 import { createCitiesRouter } from '@/modules/cities/cities.routes.js';
 import { createDriversRouter } from '@/modules/drivers/drivers.routes.js';
 import { createCarsRouter } from '@/modules/cars/cars.routes.js';
+import { createCarCatalogService } from '@/modules/cars/carCatalog.service.js';
 import { createAdminRouter } from '@/modules/admin/admin.routes.js';
 import { createRoutesRouter, createTripsRouter } from '@/modules/trips/trips.routes.js';
 import { createBookingsRouter } from '@/modules/bookings/bookings.routes.js';
@@ -76,7 +77,8 @@ export function createApp(
   v1.use('/users', createUsersRouter(prisma, notifier, bot));
   v1.use('/cities', createCitiesRouter(prisma));
   v1.use('/drivers', createDriversRouter(prisma));
-  v1.use('/cars', createCarsRouter(prisma));
+  const carCatalog = createCarCatalogService(prisma);
+  v1.use('/cars', createCarsRouter(prisma, carCatalog));
   v1.use('/trips', createTripsRouter(prisma, notifier));
   v1.use('/routes', createRoutesRouter(prisma));
   v1.use('/bookings', createBookingsRouter(prisma, notifier));
@@ -87,7 +89,7 @@ export function createApp(
   v1.use('/complaints', createComplaintsRouter(prisma, notifier));
   v1.use('/loyalty', createLoyaltyRouter(prisma, notifier));
   v1.use('/passenger-requests', createPassengerRequestsRouter(prisma, notifier));
-  v1.use('/admin', createAdminRouter(prisma, notifier));
+  v1.use('/admin', createAdminRouter(prisma, notifier, carCatalog));
   app.use('/v1', v1);
 
   // Swagger — dev/staging only, gated by ENABLE_SWAGGER.

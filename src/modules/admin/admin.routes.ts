@@ -8,9 +8,17 @@ import {
   AuditLogQuery,
   BlockBody,
   ChartNameParam,
+  CarBrandCreateBody,
+  CarBrandUpdateBody,
+  CarColorCreateBody,
+  CarColorUpdateBody,
+  CarModelCreateBody,
+  CarModelsQuery,
+  CarModelUpdateBody,
   CityCreateBody,
   CityIdParam,
   CityUpdateBody,
+  SmallIntIdParam,
   ComplaintResolveBody,
   ComplaintsAdminQuery,
   ForceCancelBody,
@@ -30,10 +38,16 @@ import { createAdminAdminsService } from './adminAdmins.service.js';
 import { createAdminComplaintsService } from './adminComplaints.service.js';
 import { createAdminTripsService } from './adminTrips.service.js';
 import { createAdminAnalyticsService } from './adminAnalytics.service.js';
+import { createAdminCarCatalogService } from './adminCarCatalog.service.js';
 import { cursorArgs, sliceAndNext } from '@/lib/pagination.js';
 import type { Notifier } from '@/lib/notifier.js';
+import type { CarCatalogService } from '@/modules/cars/carCatalog.service.js';
 
-export function createAdminRouter(prisma: PrismaClient, notifier: Notifier): Router {
+export function createAdminRouter(
+  prisma: PrismaClient,
+  notifier: Notifier,
+  catalog: CarCatalogService,
+): Router {
   const router = Router();
   router.use(requireAdmin);
 
@@ -44,6 +58,7 @@ export function createAdminRouter(prisma: PrismaClient, notifier: Notifier): Rou
   const complaints = createAdminComplaintsService(prisma);
   const tripsOps = createAdminTripsService(prisma, notifier);
   const analytics = createAdminAnalyticsService(prisma);
+  const carCatalog = createAdminCarCatalogService(prisma, catalog);
 
   // ─── Verifications ────────────────────────────────────────────────────
   router.get(
@@ -178,6 +193,140 @@ export function createAdminRouter(prisma: PrismaClient, notifier: Notifier): Rou
         req.ip ?? null,
       );
       res.json(updated);
+    }),
+  );
+
+  // ─── Car catalog: brands (superadmin write) ──────────────────────────
+  router.get(
+    '/car-brands',
+    asyncHandler(async (_req, res) => {
+      res.json({ data: await carCatalog.listBrands() });
+    }),
+  );
+  router.post(
+    '/car-brands',
+    requireAdminRole('superadmin'),
+    validate({ body: CarBrandCreateBody }),
+    asyncHandler(async (req, res) => {
+      const created = await carCatalog.createBrand(
+        req.body as Parameters<typeof carCatalog.createBrand>[0],
+        req.admin!.id,
+        req.ip ?? null,
+      );
+      res.status(201).json(created);
+    }),
+  );
+  router.patch(
+    '/car-brands/:id',
+    requireAdminRole('superadmin'),
+    validate({ params: SmallIntIdParam, body: CarBrandUpdateBody }),
+    asyncHandler(async (req, res) => {
+      const updated = await carCatalog.updateBrand(
+        Number(req.params.id),
+        req.body as Parameters<typeof carCatalog.updateBrand>[1],
+        req.admin!.id,
+        req.ip ?? null,
+      );
+      res.json(updated);
+    }),
+  );
+  router.delete(
+    '/car-brands/:id',
+    requireAdminRole('superadmin'),
+    validate({ params: SmallIntIdParam }),
+    asyncHandler(async (req, res) => {
+      const deleted = await carCatalog.deleteBrand(Number(req.params.id), req.admin!.id, req.ip ?? null);
+      res.json(deleted);
+    }),
+  );
+
+  // ─── Car catalog: models (superadmin write) ──────────────────────────
+  router.get(
+    '/car-models',
+    validate({ query: CarModelsQuery }),
+    asyncHandler(async (req, res) => {
+      const brandId = req.query.brandId !== undefined ? Number(req.query.brandId) : undefined;
+      res.json({ data: await carCatalog.listModels(brandId) });
+    }),
+  );
+  router.post(
+    '/car-models',
+    requireAdminRole('superadmin'),
+    validate({ body: CarModelCreateBody }),
+    asyncHandler(async (req, res) => {
+      const created = await carCatalog.createModel(
+        req.body as Parameters<typeof carCatalog.createModel>[0],
+        req.admin!.id,
+        req.ip ?? null,
+      );
+      res.status(201).json(created);
+    }),
+  );
+  router.patch(
+    '/car-models/:id',
+    requireAdminRole('superadmin'),
+    validate({ params: SmallIntIdParam, body: CarModelUpdateBody }),
+    asyncHandler(async (req, res) => {
+      const updated = await carCatalog.updateModel(
+        Number(req.params.id),
+        req.body as Parameters<typeof carCatalog.updateModel>[1],
+        req.admin!.id,
+        req.ip ?? null,
+      );
+      res.json(updated);
+    }),
+  );
+  router.delete(
+    '/car-models/:id',
+    requireAdminRole('superadmin'),
+    validate({ params: SmallIntIdParam }),
+    asyncHandler(async (req, res) => {
+      const deleted = await carCatalog.deleteModel(Number(req.params.id), req.admin!.id, req.ip ?? null);
+      res.json(deleted);
+    }),
+  );
+
+  // ─── Car catalog: colors (superadmin write) ──────────────────────────
+  router.get(
+    '/car-colors',
+    asyncHandler(async (_req, res) => {
+      res.json({ data: await carCatalog.listColors() });
+    }),
+  );
+  router.post(
+    '/car-colors',
+    requireAdminRole('superadmin'),
+    validate({ body: CarColorCreateBody }),
+    asyncHandler(async (req, res) => {
+      const created = await carCatalog.createColor(
+        req.body as Parameters<typeof carCatalog.createColor>[0],
+        req.admin!.id,
+        req.ip ?? null,
+      );
+      res.status(201).json(created);
+    }),
+  );
+  router.patch(
+    '/car-colors/:id',
+    requireAdminRole('superadmin'),
+    validate({ params: SmallIntIdParam, body: CarColorUpdateBody }),
+    asyncHandler(async (req, res) => {
+      const updated = await carCatalog.updateColor(
+        Number(req.params.id),
+        req.body as Parameters<typeof carCatalog.updateColor>[1],
+        req.admin!.id,
+        req.ip ?? null,
+      );
+      res.json(updated);
+    }),
+  );
+  router.delete(
+    '/car-colors/:id',
+    requireAdminRole('superadmin'),
+    validate({ params: SmallIntIdParam }),
+    asyncHandler(async (req, res) => {
+      const deleted = await carCatalog.deleteColor(Number(req.params.id), req.admin!.id, req.ip ?? null);
+      res.json(deleted);
     }),
   );
 

@@ -1,14 +1,38 @@
 import { Router } from 'express';
 import type { PrismaClient } from '@prisma/client';
 import { createCarsService } from './cars.service.js';
+import { createCarCatalogService, type CarCatalogService } from './carCatalog.service.js';
 import { CarCreateBody, CarIdParam } from './cars.schemas.js';
 import { validate } from '@/middleware/validate.js';
 import { asyncHandler } from '@/middleware/errorHandler.js';
 import { requireAuth, requirePhone } from '@/middleware/auth.js';
 
-export function createCarsRouter(prisma: PrismaClient): Router {
+export function createCarsRouter(prisma: PrismaClient, catalog?: CarCatalogService): Router {
   const router = Router();
   const service = createCarsService(prisma);
+  const catalogSvc = catalog ?? createCarCatalogService(prisma);
+
+  // ─── Car catalog (public reference data — no auth) ───────────────────
+  // Defined before '/:id' so the literal paths win. Cached in memory.
+  router.get(
+    '/catalog/brands',
+    asyncHandler(async (_req, res) => {
+      res.json({ data: await catalogSvc.listBrands() });
+    }),
+  );
+  router.get(
+    '/catalog/brands/:id/models',
+    asyncHandler(async (req, res) => {
+      const brandId = Number(req.params.id);
+      res.json({ data: Number.isInteger(brandId) ? await catalogSvc.listModels(brandId) : [] });
+    }),
+  );
+  router.get(
+    '/catalog/colors',
+    asyncHandler(async (_req, res) => {
+      res.json({ data: await catalogSvc.listColors() });
+    }),
+  );
 
   // GET /cars — the authed user's garage
   router.get(

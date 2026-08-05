@@ -14,7 +14,17 @@ export async function writeAdminAction(
     adminId: string;
     action: string;              // e.g. 'verify_driver', 'block_user'
     targetId?: string | null;
-    targetType?: 'user' | 'driver' | 'trip' | 'complaint' | 'city' | 'admin' | null;
+    targetType?:
+      | 'user'
+      | 'driver'
+      | 'trip'
+      | 'complaint'
+      | 'city'
+      | 'admin'
+      | 'car_brand'
+      | 'car_model'
+      | 'car_color'
+      | null;
     details?: Record<string, unknown>;
     ipAddress?: string | null;
   },

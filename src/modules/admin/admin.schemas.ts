@@ -51,6 +51,43 @@ export const CityUpdateBody = CityCreateBody.partial();
 
 export const CityIdParam = z.object({ id: z.coerce.number().int().positive() });
 
+// ─── Car catalog (brands · models · colors) ───────────────────────────────
+// Small manual-PK reference tables. Powers the client make/model/colour
+// pickers; clients still fall back to free text, so edits here are non-breaking.
+export const SmallIntIdParam = z.object({ id: z.coerce.number().int().positive() });
+
+export const CarBrandCreateBody = z.object({
+  name: z.string().trim().min(1).max(50),
+  sortPosition: z.number().int().min(0).max(32767).optional(),
+  isActive: z.boolean().optional(),
+});
+export const CarBrandUpdateBody = CarBrandCreateBody.partial();
+
+export const CarModelCreateBody = z.object({
+  brandId: z.number().int().positive(),
+  name: z.string().trim().min(1).max(100),
+  bodyType: z.string().trim().min(1).max(20).optional(),
+  sortPosition: z.number().int().min(0).max(32767).optional(),
+  isActive: z.boolean().optional(),
+});
+export const CarModelUpdateBody = CarModelCreateBody.partial();
+
+export const CarModelsQuery = z.object({
+  brandId: z.coerce.number().int().positive().optional(),
+});
+
+export const CarColorCreateBody = z.object({
+  nameRu: z.string().trim().min(1).max(50),
+  nameKy: z.string().trim().min(1).max(50),
+  hexCode: z
+    .string()
+    .trim()
+    .regex(/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/, 'hexCode must be #RRGGBB or #RRGGBBAA'),
+  sortPosition: z.number().int().min(0).max(32767).optional(),
+  isActive: z.boolean().optional(),
+});
+export const CarColorUpdateBody = CarColorCreateBody.partial();
+
 // ─── Admins ──────────────────────────────────────────────────────────────
 export const AdminCreateBody = z.object({
   email: z.string().email().max(200),

@@ -425,6 +425,46 @@ model Car {
   @@map("cars")
 }
 
+// ─── Car catalog (brands → models) ────────────────────────────────────
+// Reference data powering the make/model pickers when adding/editing a car.
+// Small, cached in memory; admin-editable CRUD. Ids are stable SMALLINTs so
+// the seed is idempotent and re-runnable.
+model CarBrand {
+  id           Int        @id @db.SmallInt
+  name         String     @unique @db.VarChar(50)
+  sortPosition Int        @map("sort_position") @db.SmallInt
+  isActive     Boolean    @default(true) @map("is_active")
+  models       CarModel[]
+
+  @@index([isActive, sortPosition])
+  @@map("car_brands")
+}
+
+model CarModel {
+  id           Int      @id @db.SmallInt
+  brandId      Int      @map("brand_id") @db.SmallInt
+  name         String   @db.VarChar(100)
+  bodyType     String?  @map("body_type") @db.VarChar(20) // sedan|suv|hatchback|mpv|pickup|van|truck
+  sortPosition Int      @map("sort_position") @db.SmallInt
+  isActive     Boolean  @default(true) @map("is_active")
+  brand        CarBrand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@index([brandId, sortPosition])
+  @@map("car_models")
+}
+
+model CarColor {
+  id           Int     @id @db.SmallInt
+  nameRu       String  @map("name_ru") @db.VarChar(50)
+  nameKy       String  @map("name_ky") @db.VarChar(50)
+  hexCode      String  @map("hex_code") @db.VarChar(9)
+  sortPosition Int     @map("sort_position") @db.SmallInt
+  isActive     Boolean @default(true) @map("is_active")
+
+  @@index([isActive, sortPosition])
+  @@map("car_colors")
+}
+
 // ─── Phone-reveal audit («Позвонить» taps) ────────────────────────────
 // Every reveal of a user's phone number is logged: who saw whose number,
 // in which context (trip / passenger_request). Powers the daily rate limit
