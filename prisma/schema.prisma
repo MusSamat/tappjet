@@ -413,6 +413,7 @@ model Car {
   make       String    @db.VarChar(50)
   model      String    @db.VarChar(50)
   color      String?   @db.VarChar(30)
+  year       Int?      @db.SmallInt
   plate      String    @db.VarChar(15)
   seatsCount Int       @default(4) @map("seats_count") @db.SmallInt
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)

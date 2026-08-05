@@ -13,6 +13,7 @@ export interface CarDTO {
   make: string;
   model: string;
   color: string | null;
+  year: number | null;
   plate: string;
   seatsCount: number;
   createdAt: Date;
@@ -23,6 +24,7 @@ const carSelect = {
   make: true,
   model: true,
   color: true,
+  year: true,
   plate: true,
   seatsCount: true,
   createdAt: true,
@@ -50,6 +52,7 @@ export function createCarsService(prisma: PrismaClient) {
         make: input.make,
         model: input.model,
         color: input.color ?? null,
+        year: input.year ?? null,
         plate: input.plate,
         seatsCount: input.seatsCount,
       },
