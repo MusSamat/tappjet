@@ -14,7 +14,7 @@ export const DriverVerificationBody = z.object({
   carYear: z.coerce
     .number()
     .int()
-    .min(1980, 'car must be from 1980 or newer')
+    .min(2000, 'car must be from 2000 or newer')
     .max(CURRENT_YEAR + 1, `car_year cannot exceed ${CURRENT_YEAR + 1}`),
   carColor: z.string().trim().min(1).max(30),
   // Единый стандарт номера — тот же, что в гараже (cars.schemas): после
