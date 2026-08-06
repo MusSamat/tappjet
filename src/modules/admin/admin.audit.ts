@@ -21,6 +21,7 @@ export async function writeAdminAction(
       | 'complaint'
       | 'city'
       | 'admin'
+      | 'passenger_request'
       | 'car_brand'
       | 'car_model'
       | 'car_color'

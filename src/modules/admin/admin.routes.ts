@@ -25,6 +25,8 @@ import {
   IdParam,
   RejectBody,
   RequestDocsBody,
+  RequestsAdminQuery,
+  type RequestsAdminQueryInput,
   TripIdParam,
   TripsAdminQuery,
   type TripsAdminQueryInput,
@@ -37,6 +39,7 @@ import { createAdminCitiesService } from './adminCities.service.js';
 import { createAdminAdminsService } from './adminAdmins.service.js';
 import { createAdminComplaintsService } from './adminComplaints.service.js';
 import { createAdminTripsService } from './adminTrips.service.js';
+import { createAdminRequestsService } from './adminRequests.service.js';
 import { createAdminAnalyticsService } from './adminAnalytics.service.js';
 import { createAdminCarCatalogService } from './adminCarCatalog.service.js';
 import { cursorArgs, sliceAndNext } from '@/lib/pagination.js';
@@ -57,6 +60,7 @@ export function createAdminRouter(
   const admins = createAdminAdminsService(prisma);
   const complaints = createAdminComplaintsService(prisma);
   const tripsOps = createAdminTripsService(prisma, notifier);
+  const requestsOps = createAdminRequestsService(prisma);
   const analytics = createAdminAnalyticsService(prisma);
   const carCatalog = createAdminCarCatalogService(prisma, catalog);
 
@@ -409,6 +413,31 @@ export function createAdminRouter(
       res.json(
         await tripsOps.forceCancel(req.params.id!, req.admin!.id, reason, req.ip ?? null),
       );
+    }),
+  );
+
+  // ─── Passenger requests list + detail + force-cancel ─────────────────
+  router.get(
+    '/requests',
+    validate({ query: RequestsAdminQuery }),
+    asyncHandler(async (req, res) => {
+      const q = req.query as unknown as RequestsAdminQueryInput;
+      res.json(await requestsOps.listRequests(q));
+    }),
+  );
+  router.get(
+    '/requests/:id',
+    validate({ params: IdParam }),
+    asyncHandler(async (req, res) => {
+      res.json(await requestsOps.getRequestDetail(req.params.id!));
+    }),
+  );
+  router.patch(
+    '/requests/:id/cancel',
+    validate({ params: IdParam, body: ForceCancelBody }),
+    asyncHandler(async (req, res) => {
+      const { reason } = req.body as { reason: string };
+      res.json(await requestsOps.forceCancel(req.params.id!, req.admin!.id, reason, req.ip ?? null));
     }),
   );
 

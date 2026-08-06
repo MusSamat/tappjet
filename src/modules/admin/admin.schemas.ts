@@ -51,6 +51,13 @@ export const CityUpdateBody = CityCreateBody.partial();
 
 export const CityIdParam = z.object({ id: z.coerce.number().int().positive() });
 
+// ─── Passenger requests (admin browse + force-cancel) ─────────────────────
+export const RequestsAdminQuery = CursorPaginationQuery.extend({
+  status: z.enum(['open', 'cancelled', 'closed', 'expired', 'all']).optional(),
+  q: z.string().trim().min(1).max(100).optional(),
+});
+export type RequestsAdminQueryInput = z.infer<typeof RequestsAdminQuery>;
+
 // ─── Car catalog (brands · models · colors) ───────────────────────────────
 // Small manual-PK reference tables. Powers the client make/model/colour
 // pickers; clients still fall back to free text, so edits here are non-breaking.

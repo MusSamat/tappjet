@@ -52,6 +52,25 @@ export interface AdminUserDetail extends AdminUserListItem {
     totalTrips: number;
     cancellations30d: number;
   } | null;
+  // Recent activity — the user's own trips (as driver) + requests (as passenger).
+  trips: Array<{
+    id: string;
+    originCity: string;
+    destinationCity: string;
+    departureAt: Date;
+    status: string;
+    seatsAvailable: number;
+    seatsTotal: number;
+    pricePerSeat: number;
+  }>;
+  requests: Array<{
+    id: string;
+    originCity: string;
+    destinationCity: string;
+    departureDate: Date;
+    status: string;
+    seatsNeeded: number;
+  }>;
 }
 
 export function createAdminUsersService(
@@ -128,6 +147,22 @@ export function createAdminUsersService(
       include: {
         driverProfile: true,
         _count: { select: { complaintsTargeting: true } },
+        tripsAsDriver: {
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+          select: {
+            id: true, originCity: true, destinationCity: true, departureAt: true,
+            status: true, seatsAvailable: true, seatsTotal: true, pricePerSeat: true,
+          },
+        },
+        passengerRequests: {
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+          select: {
+            id: true, originCity: true, destinationCity: true, departureDate: true,
+            status: true, seatsNeeded: true,
+          },
+        },
       },
     });
     if (!u) throw Errors.notFound('User');
@@ -158,6 +193,8 @@ export function createAdminUsersService(
             cancellations30d: u.driverProfile.cancellations30d,
           }
         : null,
+      trips: u.tripsAsDriver,
+      requests: u.passengerRequests,
     };
   }
 
