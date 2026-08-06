@@ -142,6 +142,7 @@ export const ChartNameParam = z.object({
     'registrations_by_day',
     'trips_by_day',
     'top_routes',
+    'top_cars',
     'activity_heatmap',
     'rating_by_day',
     'onboarding_funnel',

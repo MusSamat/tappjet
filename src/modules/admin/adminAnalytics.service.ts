@@ -113,6 +113,8 @@ export function createAdminAnalyticsService(prisma: PrismaClient): AdminAnalytic
         return { name, data: await chartTrips(d) };
       case 'top_routes':
         return { name, data: await chartTopRoutes(d) };
+      case 'top_cars':
+        return { name, data: await chartTopCars() };
       case 'activity_heatmap':
         return { name, data: await chartActivityHeatmap(d) };
       case 'rating_by_day':
@@ -155,6 +157,19 @@ export function createAdminAnalyticsService(prisma: PrismaClient): AdminAnalytic
       status: r.status,
       count: Number(r.count),
     }));
+  }
+
+  // Most popular car brands across the fleet (registered cars, not deleted).
+  async function chartTopCars(): Promise<Array<{ make: string; count: number }>> {
+    const rows = await prisma.$queryRaw<Array<{ make: string; count: bigint }>>`
+      SELECT make, COUNT(*)::bigint AS count
+      FROM cars
+      WHERE deleted_at IS NULL AND make <> ''
+      GROUP BY make
+      ORDER BY count DESC
+      LIMIT 10
+    `;
+    return rows.map((r) => ({ make: r.make, count: Number(r.count) }));
   }
 
   async function chartTopRoutes(days: number): Promise<
