@@ -16,6 +16,13 @@ const ListQuery = CursorPaginationQuery.extend({
 
 const IdParam = z.object({ id: z.string().uuid() });
 
+// Types that live in the notifications table for admin triage / trace history
+// but must never surface in a user's in-app feed — e.g. the 24h verification
+// SLA-breach escalation (escalate_verifications cron), which is an admin
+// concern written per-driver only to trace history. Clients can't render it, so
+// it would show as a generic "Уведомление" and flood the feed every 4h.
+const HIDDEN_FROM_USER_FEED = ['verification_sla_breach'];
+
 export function createNotificationsRouter(prisma: PrismaClient): Router {
   const router = Router();
 
@@ -28,6 +35,7 @@ export function createNotificationsRouter(prisma: PrismaClient): Router {
       const rows = await prisma.notification.findMany({
         where: {
           userId: req.user!.id,
+          type: { notIn: HIDDEN_FROM_USER_FEED },
           ...(q.unread === true ? { readAt: null } : {}),
           ...(q.unread === false ? { readAt: { not: null } } : {}),
         },
@@ -35,7 +43,11 @@ export function createNotificationsRouter(prisma: PrismaClient): Router {
         ...cursorArgs({ cursor: q.cursor, limit: q.limit }),
       });
       const unreadCount = await prisma.notification.count({
-        where: { userId: req.user!.id, readAt: null },
+        where: {
+          userId: req.user!.id,
+          readAt: null,
+          type: { notIn: HIDDEN_FROM_USER_FEED },
+        },
       });
       res.json({ ...sliceAndNext(rows, q.limit), unreadCount });
     }),
