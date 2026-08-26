@@ -437,7 +437,7 @@ export async function startTelegramBot(
       .setChatMenuButton({
         menu_button: {
           type: 'web_app',
-          text: '🚗 Открыть Tappjet',
+          text: '🚗 Открыть Terme',
           web_app: { url: MINI_APP_URL },
         },
       })
@@ -466,7 +466,7 @@ export async function startTelegramBot(
         // whose user_id is the sharer's own — no OTP, no SMS.
         const kb = new Keyboard().requestContact('📱 Поделиться номером').oneTime().resized();
         await ctx.reply(
-          'Один шаг до регистрации в Tappjet 🚗\n\nНажмите кнопку ниже, чтобы поделиться номером телефона — Telegram подтвердит его автоматически.',
+          'Один шаг до регистрации в Terme 🚗\n\nНажмите кнопку ниже, чтобы поделиться номером телефона — Telegram подтвердит его автоматически.',
           { reply_markup: kb },
         );
       }
@@ -492,7 +492,7 @@ export async function startTelegramBot(
 
     const text =
       `${greeting}\n\n` +
-      `🚗 <b>Tappjet — поездки по Кыргызстану</b>\n\n` +
+      `🚗 <b>Terme — поездки по Кыргызстану</b>\n\n` +
       `Попутчики и такси из Бишкека в Ош, Каракол, Нарын и другие города. Или предложи свою поездку!\n\n` +
       `✅ Верифицированные водители\n` +
       `⭐ Рейтинги и отзывы\n` +

@@ -45,7 +45,7 @@ const EnvSchema = z.object({
   // Dexatel — delivers OTP codes over the Telegram channel (omnichannel).
   // Empty during testing: codes are captured/logged locally (see lib/dexatel.ts).
   DEXATEL_API_KEY: z.string().default(''),
-  DEXATEL_SENDER: z.string().default('Tappjet'),
+  DEXATEL_SENDER: z.string().default('Terme'),
 
   // OAuth — audience / client IDs to match in verified JWTs. Comma-separated
   // so the Flutter app and the Web client can use different client ids.
@@ -56,7 +56,7 @@ const EnvSchema = z.object({
   SMS_API_URL: z.string().default(''),
   SMS_API_LOGIN: z.string().default(''),
   SMS_API_PASSWORD: z.string().default(''),
-  SMS_SENDER: z.string().default('Tappjet'),
+  SMS_SENDER: z.string().default('Terme'),
 
   SUPERADMIN_EMAIL: z.string().email().default('superadmin@tappjet.kg'),
   SUPERADMIN_TEMP_PASSWORD: z.string().min(8).default('change-on-first-login-please'),

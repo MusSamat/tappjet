@@ -98,7 +98,7 @@ export async function handleTelegramLinkToken(
 
   await bot.api.sendMessage(
     telegramId,
-    `Tappjet: ${code} — код подтверждения. Срок действия: 10 минут.`,
+    `Terme: ${code} — код подтверждения. Срок действия: 10 минут.`,
   );
 }
 
@@ -239,7 +239,7 @@ export async function registerFromTelegramContact(
 export function createOtpMethods(prisma: PrismaClient, _bot: TelegramSender | null = null) {
   async function sendOtp(phone: string): Promise<{ expiresInSec: number; debug_code?: string }> {
     const code = await createOtpRecord(prisma, phone);
-    const text = `Tappjet: ${code} — код подтверждения. Срок действия: 10 минут.`;
+    const text = `Terme: ${code} — код подтверждения. Срок действия: 10 минут.`;
     try {
       // Real delivery is DISABLED for now — the phone number is obtained only via
       // Telegram (Mini App requestContact, or browser login via the bot's
@@ -275,7 +275,7 @@ export function createOtpMethods(prisma: PrismaClient, _bot: TelegramSender | nu
       return { expiresInSec: OTP_TTL_SEC };
     }
     const code = await createOtpRecord(prisma, phone);
-    const text = `Tappjet: ${code} — код подтверждения. Срок действия: 10 минут.`;
+    const text = `Terme: ${code} — код подтверждения. Срок действия: 10 минут.`;
     recordSent(phone, text);
     logger.info({ phone }, '[MOCK OTP] code captured locally (no DEXATEL_API_KEY)');
     return { expiresInSec: OTP_TTL_SEC };

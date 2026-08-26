@@ -32,7 +32,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─── Config ───────────────────────────────────────────────────────────
 const CACHE_DIR = resolve(__dirname, '../var/osm');
-const UA = 'tappjet-geo-import/1.0 (+https://tappjet.local)';
+const UA = 'terme-geo-import/1.0 (+https://terme.local)';
 // Tried in array order among currently-live mirrors (see circuit breaker in
 // pickEndpoint). maps.mail.ru is listed first: it answered area-filtered
 // relation queries in ~1 s while both classic mirrors were 429/timing out.

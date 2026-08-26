@@ -4,7 +4,7 @@ import { env, isDev, isTest } from '@/config/env.js';
 export const logger = pino({
   level: isTest ? 'silent' : env.LOG_LEVEL,
   base: {
-    service: 'tappjet-api',
+    service: 'terme-api',
     env: env.NODE_ENV,
   },
   timestamp: pino.stdTimeFunctions.isoTime,

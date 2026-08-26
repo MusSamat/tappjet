@@ -37,7 +37,7 @@ const cursorPaginated = (itemRef: string): Record<string, unknown> => ({
 export const openapiDocument = {
   openapi: '3.0.3',
   info: {
-    title: 'Tappjet API',
+    title: 'Terme API',
     version: '1.0.0',
     description:
       'Kyrgyzstan intercity carpooling platform. All endpoints under /v1. Bearer JWT where marked. TZ v2.0.',

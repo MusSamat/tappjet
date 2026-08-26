@@ -135,7 +135,7 @@ export function createPasswordMethods(
     // SMS "your number was changed" notice to the OLD number is disabled during
     // the Telegram-only testing period (Telegram Gateway only sends verification
     // codes, not free-text notices). Re-enable with SMS, or DM via the bot.
-    // await getSmsProvider().send(oldPhone, 'Tappjet: номер телефона в вашем аккаунте был изменён…');
+    // await getSmsProvider().send(oldPhone, 'Terme: номер телефона в вашем аккаунте был изменён…');
     void oldPhone;
 
     return result;

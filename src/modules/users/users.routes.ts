@@ -77,7 +77,7 @@ export function createUsersRouter(
       res
         .setHeader(
           'Content-Disposition',
-          `attachment; filename="tappjet-export-${req.user!.id}.json"`,
+          `attachment; filename="terme-export-${req.user!.id}.json"`,
         )
         .setHeader('Content-Type', 'application/json; charset=utf-8')
         .send(JSON.stringify(dump, null, 2));

@@ -6,7 +6,7 @@
 set -euo pipefail
 
 BACKEND_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-FRONTEND_DIR="$BACKEND_DIR/../tappjet_ft"
+FRONTEND_DIR="$BACKEND_DIR/../terme_ft"
 LOG_DIR="$BACKEND_DIR/var/tunnels"
 CF="$HOME/.local/bin/cloudflared"
 mkdir -p "$LOG_DIR"
@@ -68,7 +68,7 @@ if [ "${1:-}" = "--prod" ]; then
   TOKEN=$(grep -E '^TELEGRAM_BOT_TOKEN=' "$BACKEND_DIR/.env" | cut -d= -f2)
   if [ -n "$TOKEN" ]; then
     OK=$(curl -s -m10 -X POST "https://api.telegram.org/bot${TOKEN}/setChatMenuButton" -H "Content-Type: application/json" \
-      -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"🚗 Tappjet\",\"web_app\":{\"url\":\"$F/trips\"}}}" | grep -o '"ok":true')
+      -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"🚗 Terme\",\"web_app\":{\"url\":\"$F/trips\"}}}" | grep -o '"ok":true')
     [ -n "$OK" ] && echo "  bot menu button updated automatically ✓" || echo "  ✗ bot button update failed — set manually in BotFather"
   fi
   echo "  ALL DONE — open on phone: $F"

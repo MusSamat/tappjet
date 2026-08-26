@@ -13,8 +13,8 @@ import { env, isProd } from '@/config/env.js';
  */
 
 export const REFRESH_COOKIE = {
-  user: 'tappjet_rt',
-  admin: 'tappjet_admin_rt',
+  user: 'terme_rt',
+  admin: 'terme_admin_rt',
   // Scope the cookie to the auth endpoints only — it is never sent to the rest
   // of the API (which authenticates with the in-memory access token).
   path: '/v1/auth',

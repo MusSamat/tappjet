@@ -3,7 +3,7 @@
 module.exports = {
   apps: [
     {
-      name: 'tappjet-api',
+      name: 'terme-api',
       // Entry emitted by `npm run build`. Verify with: find dist -name index.js
       script: 'dist/src/index.js',
       node_args: '--env-file=.env',

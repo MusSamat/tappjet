@@ -1,4 +1,4 @@
-# CLAUDE.md — Tappjet Platform
+# CLAUDE.md — Terme Platform
 # Merge of: behavioral guidelines + project-specific rules
 # Goal: минимум токенов, максимум точности, ноль галлюцинаций
 
